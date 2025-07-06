@@ -33,9 +33,6 @@ from .routers import (
 from .crud import get_user_by_email, create_user, get_expense_category_by_name, create_expense_category
 from .schemas import UserCreate, ExpenseCategoryCreate
 
-# Crea las tablas de la base de datos (incluyendo las nuevas si los modelos están correctamente definidos e importados)
-models.Base.metadata.create_all(bind=engine)
-
 
 def create_first_superuser_if_not_exists():
     db = SessionLocal()

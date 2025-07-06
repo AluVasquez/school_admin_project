@@ -1,4 +1,4 @@
-const API_BASE_URL = "http://127.0.0.1:8000"; // O tu constante global
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
 // Helper para manejar respuestas de la API
 const handleApiResponse = async (response) => {

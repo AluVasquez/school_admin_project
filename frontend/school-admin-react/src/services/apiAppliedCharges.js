@@ -1,4 +1,4 @@
-const API_BASE_URL = "http://127.0.0.1:8000"; // Centralizar esta URL
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL; // Centralizar esta URL
 
 /**
  * Obtiene la lista de cargos aplicados con filtros y paginación.

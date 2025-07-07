@@ -4,7 +4,7 @@ import { loginUser as apiLoginUser } from '../services/apiAuth'; // Ya lo tienes
 // Ejemplo: import { getCurrentUserDetails } from '../services/apiAuth'; 
 // Esta función llamaría a GET /auth/users/me/
 
-const API_BASE_URL = "http://127.0.0.1:8000"; // O tu constante
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
 // Esta función iría en apiAuth.js o donde tengas tus llamadas de API
 async function fetchUserDetailsFromServer(token) {

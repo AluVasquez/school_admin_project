@@ -2773,7 +2773,7 @@ def get_total_outstanding_debt_ves(db: Session) -> float:
 
 
 def get_revenue_trend(
-    db: Session, 
+    db: Session,
     granularity: str = "month", # "month" o "day"
     count: int = 12 # número de períodos hacia atrás
 ) -> List[schemas.MonthlyRevenueSummary]:
@@ -2783,13 +2783,12 @@ def get_revenue_trend(
     results_map = {}
     today = date.today()
     
-    date_format_strftime = ""
-    date_format_label = ""
-
+    # Definir el formato de fecha para PostgreSQL
+    date_format_postgresql = ""
+    
     if granularity == "month":
-        date_format_strftime = '%Y-%m'
-        date_format_label = "YYYY-MM"
-        # Generar la lista de períodos mensuales
+        date_format_postgresql = 'YYYY-MM'
+        # Lógica para pre-llenar el mapa de resultados con todos los meses del rango
         for i in range(count):
             current_month_val = today.month - i
             current_year_val = today.year
@@ -2801,7 +2800,7 @@ def get_revenue_trend(
                 period=period_str,
                 revenue_ves=0.0
             )
-        # Determinar la fecha de inicio para la consulta (primer día del mes más antiguo)
+        # Determinar la fecha de inicio para la consulta
         start_month_calc = today.month - (count - 1)
         start_year_calc = today.year
         while start_month_calc <= 0:
@@ -2810,9 +2809,8 @@ def get_revenue_trend(
         oldest_period_start_date = date(start_year_calc, start_month_calc, 1)
 
     elif granularity == "day":
-        date_format_strftime = '%Y-%m-%d'
-        date_format_label = "YYYY-MM-DD"
-        # Generar la lista de períodos diarios
+        date_format_postgresql = 'YYYY-MM-DD'
+        # Lógica para pre-llenar el mapa de resultados con todos los días del rango
         for i in range(count):
             current_date = today - timedelta(days=i)
             period_str = current_date.strftime('%Y-%m-%d')
@@ -2825,21 +2823,21 @@ def get_revenue_trend(
     else:
         raise ValueError("Granularidad no soportada. Usar 'month' o 'day'.")
 
-    # Obtener el total de pagos recibidos por período
+    # Obtener el total de pagos recibidos por período usando to_char
     payments_by_period = db.query(
-            sql_func.strftime(date_format_strftime, models.Payment.payment_date).label('period'),
+            sql_func.to_char(models.Payment.payment_date, date_format_postgresql).label('period'),
             sql_func.sum(models.Payment.amount_paid_ves_equivalent).label('total_revenue_ves')
         )\
         .filter(models.Payment.payment_date >= oldest_period_start_date)\
-        .filter(models.Payment.payment_date <= today).group_by(sql_func.strftime(date_format_strftime,
-                                                                                models.Payment.payment_date)).all()
+        .filter(models.Payment.payment_date <= today)\
+        .group_by(sql_func.to_char(models.Payment.payment_date, date_format_postgresql))\
+        .all()
 
     for row in payments_by_period:
         if row.period in results_map:
             results_map[row.period].revenue_ves = round(float(row.total_revenue_ves or 0.0), 2)
             
-    # Convertir el mapa a una lista y ordenarla por período
-    # El frontend puede preferir más antiguo primero para gráficas de tendencia.
+    # Convertir el mapa a una lista y ordenarla
     sorted_results = sorted(results_map.values(), key=lambda x: x.period)
     
     return sorted_results
@@ -2905,17 +2903,20 @@ def get_enriched_dashboard_summary(db: Session) -> schemas.DashboardSummaryRespo
     
 def get_expense_trend(
     db: Session,
-    granularity: str = "month", # "month" o "day"
-    count: int = 12, # número de períodos hacia atrás
-    current_usd_rate: Optional[float] = None # Tasa USD actual para equivalencia
-) -> List[schemas.MonthlyExpenseSummary]:
+    granularity: str = "month",
+    count: int = 12,
+    current_usd_rate: Optional[float] = None
+) -> List[schemas.MonthlyExpenseSummary]: # Tipo de retorno corregido
+    """
+    Calcula los GASTOS totales (VES) por período (mes o día) para los últimos 'count' períodos.
+    """
     results_map = {}
     today = date.today()
     
-    date_format_sqlite_func = "" # Para la función strftime de SQLite
+    date_format_postgresql = ""
     
     if granularity == "month":
-        date_format_sqlite_func = '%Y-%m'
+        date_format_postgresql = 'YYYY-MM'
         for i in range(count):
             current_month_val = today.month - i
             current_year_val = today.year
@@ -2934,7 +2935,7 @@ def get_expense_trend(
         oldest_period_start_date = date(start_year_calc, start_month_calc, 1)
 
     elif granularity == "day":
-        date_format_sqlite_func = '%Y-%m-%d'
+        date_format_postgresql = 'YYYY-MM-DD'
         for i in range(count):
             current_date = today - timedelta(days=i)
             period_str = current_date.strftime('%Y-%m-%d')
@@ -2945,8 +2946,9 @@ def get_expense_trend(
     else:
         raise ValueError("Granularidad no soportada para tendencia de gastos. Usar 'month' o 'day'.")
 
+    # CORRECCIÓN: La consulta ahora apunta a models.Expense y usa to_char
     expenses_by_period_query = db.query(
-            sql_func.strftime(date_format_sqlite_func, models.Expense.expense_date).label('period'),
+            sql_func.to_char(models.Expense.expense_date, date_format_postgresql).label('period'),
             sql_func.sum(
                 sql_func.coalesce(models.Expense.amount_ves_equivalent_at_creation, models.Expense.amount)
             ).label('total_expenses_ves')
@@ -2954,7 +2956,7 @@ def get_expense_trend(
         .filter(models.Expense.expense_date >= oldest_period_start_date)\
         .filter(models.Expense.expense_date <= today)\
         .filter(models.Expense.payment_status != models.ExpensePaymentStatus.CANCELLED)\
-        .group_by(sql_func.strftime(date_format_sqlite_func, models.Expense.expense_date))\
+        .group_by(sql_func.to_char(models.Expense.expense_date, date_format_postgresql))\
         .all()
 
     for row in expenses_by_period_query:
@@ -3007,29 +3009,36 @@ def get_monthly_billing_payment_summary(db: Session, months_count: int = 12) -> 
     # 2. Obtener el total de cargos emitidos por mes (amount_due_ves_at_emission)
     #    La issue_date del AppliedCharge determina a qué período pertenece el cargo.
     charges_by_month = db.query(
-            sql_func.strftime('%Y-%m', models.AppliedCharge.issue_date).label('period'),
+            extract('year', models.AppliedCharge.issue_date).label('year'),
+            extract('month', models.AppliedCharge.issue_date).label('month'),
             sql_func.sum(models.AppliedCharge.amount_due_ves_at_emission).label('total_charged')
         )\
         .filter(models.AppliedCharge.issue_date >= oldest_period_start_date)\
-        .filter(models.AppliedCharge.issue_date <= today).filter(models.AppliedCharge.status != models.AppliedChargeStatus
-                                                                .CANCELLED).group_by(sql_func.strftime('%Y-%m', models.AppliedCharge.issue_date)).all()
+        .filter(models.AppliedCharge.issue_date <= today)\
+        .filter(models.AppliedCharge.status != models.AppliedChargeStatus.CANCELLED)\
+        .group_by(extract('year', models.AppliedCharge.issue_date), extract('month', models.AppliedCharge.issue_date))\
+        .all()
 
     for row in charges_by_month:
-        if row.period in results_map:
-            results_map[row.period].total_charged_ves_emission = round(float(row.total_charged or 0.0), 2)
+        period_str = f"{row.year:04d}-{row.month:02d}"
+        if period_str in results_map:
+            results_map[period_str].total_charged_ves_emission = round(float(row.total_charged or 0.0), 2)
 
-    # 3. Obtener el total de pagos recibidos por mes (amount_paid_ves_equivalent)
-    #    La payment_date del Payment determina a qué período pertenece el pago.
+    # 3. Obtener el total de pagos recibidos por mes usando extract
     payments_by_month = db.query(
-            sql_func.strftime('%Y-%m', models.Payment.payment_date).label('period'),
+            extract('year', models.Payment.payment_date).label('year'),
+            extract('month', models.Payment.payment_date).label('month'),
             sql_func.sum(models.Payment.amount_paid_ves_equivalent).label('total_paid')
         )\
         .filter(models.Payment.payment_date >= oldest_period_start_date)\
-        .filter(models.Payment.payment_date <= today).group_by(sql_func.strftime('%Y-%m', models.Payment.payment_date)).all()
+        .filter(models.Payment.payment_date <= today)\
+        .group_by(extract('year', models.Payment.payment_date), extract('month', models.Payment.payment_date))\
+        .all()
 
     for row in payments_by_month:
-        if row.period in results_map:
-            results_map[row.period].total_paid_in_period_ves = round(float(row.total_paid or 0.0), 2)
+        period_str = f"{row.year:04d}-{row.month:02d}"
+        if period_str in results_map:
+            results_map[period_str].total_paid_in_period_ves = round(float(row.total_paid or 0.0), 2)
             
     # Convertir el mapa a una lista y ordenarla por período (más reciente primero o más antiguo primero)
     # El frontend puede preferir más antiguo primero para gráficas de tendencia.
@@ -3218,27 +3227,28 @@ def toggle_supplier_active_status(db: Session, supplier_id: int) -> Optional[mod
 # --- CRUD para Expense ---
 
 def create_expense(db: Session, expense_in: schemas.ExpenseCreate, user_id: int) -> models.Expense:
-    # 1. Lógica Condicional para el Proveedor
-    category_id_to_use = expense_in.category_id
-
-    if expense_in.supplier_id is not None:
-        # Si se proporciona un proveedor, validarlo
-        supplier = get_supplier(db, expense_in.supplier_id)
-        if not supplier or not supplier.is_active:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Proveedor ID {expense_in.supplier_id} no válido o inactivo."
-            )
-        # La categoría del proveedor podría tener precedencia si esa es la regla de negocio
-        # Por ahora, respetamos la que viene en el payload del gasto, que es más flexible.
-        # category_id_to_use = supplier.category_id 
+    # 1. Validar el proveedor y derivar la categoría
+    supplier = get_supplier(db, expense_in.supplier_id)
+    if not supplier or not supplier.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Proveedor ID {expense_in.supplier_id} no válido o inactivo."
+        )
     
-    # 2. Validar que la categoría exista
+    if not supplier.category_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"El proveedor '{supplier.name}' no tiene una categoría de gasto asignada. Por favor, edite el proveedor."
+        )
+    
+    category_id_to_use = supplier.category_id
+
+    # 2. Validar que la categoría derivada exista y esté activa
     category = get_expense_category(db, category_id_to_use)
     if not category or not category.is_active:
          raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Categoría de Gasto ID {category_id_to_use} no válida o inactiva."
+            detail=f"La categoría de gasto ID {category_id_to_use} (derivada del proveedor) no es válida o está inactiva."
         )
 
     # 3. Lógica de conversión de moneda (se mantiene igual)
@@ -3255,11 +3265,10 @@ def create_expense(db: Session, expense_in: schemas.ExpenseCreate, user_id: int)
 
     # 4. Crear el objeto de gasto para la base de datos
     expense_data = expense_in.model_dump()
-    # Aseguramos que category_id se use desde nuestra variable validada
-    expense_data['category_id'] = category_id_to_use
-
+    
     db_expense = models.Expense(
         **expense_data,
+        category_id=category_id_to_use, # Usar la categoría derivada
         user_id=user_id,
         amount_ves_equivalent_at_creation=amount_ves_equiv,
         exchange_rate_at_creation=rate_at_creation,
@@ -3547,7 +3556,7 @@ def get_expenses_summary_by_supplier(
             ).label("total_expenses_ves"),
             sql_func.count(models.Expense.id).label("expense_count")
         )\
-        .outerjoin(models.Supplier, models.Expense.supplier_id == models.Supplier.id)\
+        .join(models.Supplier, models.Expense.supplier_id == models.Supplier.id)\
         .filter(models.Expense.expense_date >= start_date)\
         .filter(models.Expense.expense_date <= end_date)\
         .filter(models.Expense.payment_status != models.ExpensePaymentStatus.CANCELLED)
@@ -3587,30 +3596,31 @@ def get_expense_trend_report(
     db: Session,
     start_date: date,
     end_date: date,
-    granularity: str = "month", # "month", "day", o "year"
+    granularity: str = "month",
     current_usd_rate: Optional[float] = None,
     include_only_category_id: Optional[int] = None,
     exclude_category_id: Optional[int] = None
-) -> List[schemas.MonthlyExpenseSummary]: # Reutilizamos MonthlyExpenseSummary
+) -> List[schemas.MonthlyExpenseSummary]:
     """
     Obtiene la tendencia de gastos totales (VES y USD equivalente si se provee tasa)
     por período (día, mes, o año) dentro de un rango de fechas.
-    Excluye gastos cancelados.
-    Rellena los períodos sin gastos con 0.
-    Permite excluir una categoría específica.
+    Excluye gastos cancelados. Rellena los períodos sin gastos con 0.
+    Permite incluir o excluir una categoría específica.
     """
     if start_date > end_date:
         raise ValueError("La fecha de inicio no puede ser posterior a la fecha de fin.")
 
     results_map = {}
-    date_format_sqlite_func = ""
+    
+    # CAMBIO: Definir el formato de fecha para PostgreSQL
+    date_format_postgresql = ""
 
-    # Determinar formato de fecha y generar todos los períodos en el rango
+    # Determinar formato de fecha y generar todos los períodos en el rango para el mapa
     if granularity == "month":
-        date_format_sqlite_func = '%Y-%m'
+        date_format_postgresql = 'YYYY-MM'
         current_period_date = start_date
         while current_period_date <= end_date:
-            period_str = current_period_date.strftime(date_format_sqlite_func)
+            period_str = current_period_date.strftime('%Y-%m')
             results_map[period_str] = schemas.MonthlyExpenseSummary(
                 period=period_str, expenses_ves=0.0, expenses_usd_equivalent=0.0
             )
@@ -3619,19 +3629,19 @@ def get_expense_trend_report(
                 current_period_date = current_period_date.replace(year=current_period_date.year + 1, month=1)
             else:
                 current_period_date = current_period_date.replace(month=current_period_date.month + 1)
+    
     elif granularity == "day":
-        date_format_sqlite_func = '%Y-%m-%d'
+        date_format_postgresql = 'YYYY-MM-DD'
         current_period_date = start_date
         while current_period_date <= end_date:
-            period_str = current_period_date.strftime(date_format_sqlite_func)
+            period_str = current_period_date.strftime('%Y-%m-%d')
             results_map[period_str] = schemas.MonthlyExpenseSummary(
                 period=period_str, expenses_ves=0.0, expenses_usd_equivalent=0.0
             )
             current_period_date += timedelta(days=1)
+
     elif granularity == "year":
-        date_format_sqlite_func = '%Y'
-        current_period_date = start_date
-        # Ensure we cover all years within the range, even if start/end dates are mid-year
+        date_format_postgresql = 'YYYY'
         start_year = start_date.year
         end_year = end_date.year
         for year_val in range(start_year, end_year + 1):
@@ -3642,9 +3652,9 @@ def get_expense_trend_report(
     else:
         raise ValueError("Granularidad no soportada. Usar 'month', 'day' o 'year'.")
 
-    # Consultar los gastos agrupados por el período
+    # CAMBIO: Consultar los gastos usando to_char en lugar de strftime
     query = db.query(
-            sql_func.strftime(date_format_sqlite_func, models.Expense.expense_date).label('period'),
+            sql_func.to_char(models.Expense.expense_date, date_format_postgresql).label('period'),
             sql_func.sum(
                 sql_func.coalesce(models.Expense.amount_ves_equivalent_at_creation, models.Expense.amount)
             ).label('total_expenses_ves')
@@ -3655,10 +3665,10 @@ def get_expense_trend_report(
 
     if include_only_category_id is not None:
         query = query.filter(models.Expense.category_id == include_only_category_id)
-    elif exclude_category_id is not None: # Usar elif para que sean mutuamente excluyentes si se envían ambos por error
+    elif exclude_category_id is not None:
         query = query.filter(models.Expense.category_id != exclude_category_id)
 
-    expenses_by_period_query = query.group_by(sql_func.strftime(date_format_sqlite_func, models.Expense.expense_date)).all()
+    expenses_by_period_query = query.group_by(sql_func.to_char(models.Expense.expense_date, date_format_postgresql)).all()
 
     # Actualizar el mapa con los resultados de la consulta
     for row in expenses_by_period_query:

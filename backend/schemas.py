@@ -1014,8 +1014,8 @@ class ExpenseBase(BaseModel):
     invoice_document_url: Optional[str] = Field(None, max_length=500, description="URL al documento de la factura del proveedor")
 
 class ExpenseCreate(ExpenseBase):
-    category_id: int = Field(..., description="ID de la categoría a la que pertenece el gasto (obligatorio)")
-    supplier_id: Optional[int] = Field(None, description="ID del proveedor (opcional)")
+    #category_id: int = Field(..., description="ID de la categoría a la que pertenece el gasto (obligatorio)")
+    supplier_id: int = Field(None, description="ID del proveedor (opcional)")
 
 class ExpenseUpdate(BaseModel): # Campos que se permitiría editar para un gasto existente
     expense_date: Optional[date] = None

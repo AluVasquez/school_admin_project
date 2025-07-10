@@ -4920,12 +4920,14 @@ def create_employee_payment(
     db: Session,
     payment_in: schemas.EmployeePaymentCreate,
     created_by_user_id: int,
-    default_expense_category_name: str = "Sueldos y Salarios del Personal"
+    default_expense_category_name: str = "Sueldos y Salarios del Personal",
+    internal_supplier_name: str = "Pagos Internos al Personal" # Nombre para el proveedor interno
 ) -> models.EmployeePayment:
     db_employee = get_employee(db, payment_in.employee_id)
     if not db_employee:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Empleado con ID {payment_in.employee_id} no encontrado.")
 
+    # Crear el objeto de pago al empleado
     db_employee_payment = models.EmployeePayment(
         employee_id=payment_in.employee_id,
         payment_date=payment_in.payment_date,
@@ -4937,9 +4939,46 @@ def create_employee_payment(
     )
     db.add(db_employee_payment)
 
+    # Actualizar el saldo del empleado
     db_employee.current_balance_ves = (db_employee.current_balance_ves or 0.0) - payment_in.amount_paid_ves
     db.add(db_employee)
 
+    # 1. Buscar o crear la categoría de gasto para sueldos
+    expense_category = get_expense_category_by_name(db, name=default_expense_category_name)
+    if not expense_category:
+        category_to_create = schemas.ExpenseCategoryCreate(name=default_expense_category_name, description="Gastos relacionados con la nómina y pagos al personal.")
+        expense_category = create_expense_category(db, category_in=category_to_create)
+
+    # 2. Buscar o crear el proveedor interno y asociarlo a la categoría de sueldos
+    internal_supplier = get_supplier_by_name(db, name=internal_supplier_name)
+    if not internal_supplier:
+        supplier_to_create = schemas.SupplierCreate(
+            name=internal_supplier_name,
+            category_id=expense_category.id,
+            rif_ci=None, # Es un proveedor interno, no necesita RIF
+            is_active=True
+        )
+        internal_supplier = create_supplier(db, supplier_in=supplier_to_create)
+
+    # 3. Crear el payload del gasto usando el ID del proveedor interno
+    expense_description = f"Pago de nómina/salario a {db_employee.full_name} ({db_employee.identity_document or 'ID N/A'}). Fecha Pago: {payment_in.payment_date.strftime('%d/%m/%Y')}."
+    if payment_in.reference_number:
+        expense_description += f" Ref: {payment_in.reference_number}."
+
+    # CAMBIO CLAVE: Usamos el ID del proveedor interno y ya no pasamos category_id
+    expense_data_in = schemas.ExpenseCreate(
+        expense_date=payment_in.payment_date,
+        description=expense_description,
+        supplier_id=internal_supplier.id, # <-- CORRECCIÓN
+        amount=payment_in.amount_paid_ves,
+        currency=models.Currency.VES,
+        notes=f"Pago automático generado desde módulo de personal. ID de Pago a Empleado: {db_employee_payment.id}"
+    )
+
+    # 4. Crear el registro de gasto
+    new_expense_record = create_expense(db=db, expense_in=expense_data_in, user_id=created_by_user_id)
+    
+    # 5. Lógica para crear el recibo de pago (payslip) y registrar el pago del gasto
     school_config = get_school_configuration(db)
     if not school_config:
         db.rollback()
@@ -4948,68 +4987,30 @@ def create_employee_payment(
             detail="La configuración de la escuela no está establecida, no se puede generar el recibo de pago."
         )
     
-    db.flush()
+    db.flush() # Para asegurar que db_employee_payment tiene un ID
     create_payslip(db, employee_payment=db_employee_payment, school_config=school_config)
 
-    expense_category = get_expense_category_by_name(db, name=default_expense_category_name)
-    if not expense_category:
-        category_to_create = schemas.ExpenseCategoryCreate(name=default_expense_category_name, description="Gastos relacionados con la nómina y pagos al personal.")
-        expense_category = create_expense_category(db, category_in=category_to_create)
-
-    expense_description = f"Pago de nómina/salario a {db_employee.full_name} ({db_employee.identity_document or 'ID N/A'}). Fecha Pago: {payment_in.payment_date.strftime('%d/%m/%Y')}."
-    if payment_in.reference_number:
-        expense_description += f" Ref: {payment_in.reference_number}."
-
-    expense_data_in = schemas.ExpenseCreate(
-        expense_date=payment_in.payment_date,
-        description=expense_description,
-        category_id=expense_category.id,
-        supplier_id=None,
-        amount=payment_in.amount_paid_ves,
-        currency=models.Currency.VES,
-        notes=f"Pago automático generado desde módulo de personal."
-    )
-
-    # Llama a la función `create_expense` que ahora sí recibirá un objeto válido
-    new_expense_record = create_expense(db=db, expense_in=expense_data_in, user_id=created_by_user_id)
-    
-    # --- El resto de la lógica para vincular el gasto y el pago ---
+    # Marcar el gasto recién creado como pagado
     if new_expense_record and new_expense_record.id:
-        db.flush()
-        if db_employee_payment.id:
-             new_expense_record.notes = f"Pago automático generado desde módulo de personal. ID de Pago a Empleado: {db_employee_payment.id}"
-             db.add(new_expense_record)
-        
         expense_payment_for_expense_record = schemas.ExpensePaymentCreate(
             expense_id=new_expense_record.id,
             payment_date=payment_in.payment_date,
             amount_paid=new_expense_record.amount,
             currency_paid=models.Currency.VES,
             payment_method_used=payment_in.payment_method if payment_in.payment_method else "Pago de Nómina",
-            reference_number=payment_in.reference_number,
-            notes=f"Registro automático de pago para gasto de nómina del empleado {db_employee.full_name}."
+            reference_number=payment_in.reference_number
         )
-        try:
-            create_expense_payment(db=db, payment_in=expense_payment_for_expense_record, user_id=created_by_user_id)
-        except HTTPException as e_exp_pay_create:
-            db.rollback()
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error al registrar el pago interno para el gasto de nómina: {e_exp_pay_create.detail}")
-    else:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="No se pudo crear el registro de gasto base para el pago del empleado.")
-
+        # Esta llamada marcará el gasto como 'paid' internamente
+        create_expense_payment(db=db, payment_in=expense_payment_for_expense_record, user_id=created_by_user_id)
+    
     try:
         db.commit()
-    except Exception as e_commit_final:
+    except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error final al guardar pago y gasto asociado: {str(e_commit_final)}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error final al guardar pago y gasto asociado: {str(e)}")
 
     db.refresh(db_employee_payment)
     db.refresh(db_employee)
-
-    if new_expense_record and new_expense_record.id:
-        db.refresh(new_expense_record)
-
     return db_employee_payment
 
 

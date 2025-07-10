@@ -1802,7 +1802,7 @@ def create_payment(db: Session, payment_in: schemas.PaymentCreate) -> models.Pay
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"El monto a asignar ({formatCurrency(amount_to_allocate_in_ves, 'VES')}) para el cargo ID {db_applied_charge.id} " \
                            f"excede su saldo pendiente ({formatCurrency(balance_due_ves_for_charge, 'VES')}). " \
-                           f"Monto original de asignación fue {formatCurrency(amount_to_allocate_in_payment_currency, currency_paid.value)}."
+                           f"Monto original de asignación fue {formatCurrency(amount_to_allocate_in_payment_currency, currency_paid)}."
                 )
             
             total_ves_actually_allocated_by_user += amount_to_allocate_in_ves
@@ -1916,10 +1916,14 @@ def create_payment(db: Session, payment_in: schemas.PaymentCreate) -> models.Pay
     return get_payment(db, payment_id=db_payment.id) 
 
 # Helper para formatear moneda en mensajes de error del backend
-def formatCurrency(amount, currency_code):
-    # Esta es una simplificación. En un entorno real, podrías usar una librería
-    # o una lógica más robusta si necesitas formatos específicos.
-    return f"{amount:,.2f} {currency_code}"
+def formatCurrency(amount, currency):
+    """
+    Formatea un monto a un string de moneda, aceptando tanto un string (ej: 'USD')
+    como un objeto Enum (ej: models.Currency.USD).
+    """
+    # Si el objeto 'currency' tiene un atributo '.value', lo usamos. Si no, usamos el objeto tal cual (porque ya es un string).
+    currency_str = currency.value if hasattr(currency, 'value') else currency
+    return f"{amount:,.2f} {currency_str}"
 
 
 def get_payment(db: Session, payment_id: int) -> Optional[models.Payment]:

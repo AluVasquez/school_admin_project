@@ -10,7 +10,7 @@ const ADJUSTMENT_TYPES_OPTIONS = [
 ];
 
 const CURRENCIES_OPTIONS = [ // Reutiliza o importa desde un archivo de constantes si ya existe
-    { value: "VES", label: "VES (Bolívares)" },
+    { value: "VES", label: "Bs.S (Bolívares)" },
     { value: "USD", label: "USD (Dólares)" },
     { value: "EUR", label: "EUR (Euros)" },
 ];
@@ -115,7 +115,7 @@ function EmployeeBalanceAdjustmentModal({ isOpen, onClose, token, employee, onAd
             title={`Registrar Ajuste de Saldo para: ${employee.full_name}`}
         >
             <div className="text-sm mb-4 p-3 bg-yellow-50 rounded-md border border-yellow-200">
-                <p><strong>Saldo Actual del Empleado (VES):</strong> 
+                <p><strong>Saldo Actual del Empleado:</strong> 
                     <span className={`font-semibold ml-1 ${parseFloat(employee.current_balance_ves || 0) >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                         {formatCurrency(employee.current_balance_ves, 'VES')}
                     </span>
@@ -154,7 +154,7 @@ function EmployeeBalanceAdjustmentModal({ isOpen, onClose, token, employee, onAd
                     </div>
                 </div>
                 <p className="text-xs text-gray-500">
-                    Si el ajuste es en USD/EUR, se usará la tasa de cambio registrada para la "Fecha del Ajuste" para calcular el impacto en el saldo VES.
+                    Si el ajuste es en USD/EUR, se usará la tasa de cambio registrada para la "Fecha del Ajuste", para calcular el impacto del saldo en Bs.S.
                 </p>
 
                 {formError && <p className="text-red-600 text-xs italic text-center py-1 bg-red-50 rounded">{formError}</p>}

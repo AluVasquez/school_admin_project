@@ -114,7 +114,7 @@ function RecordEmployeePaymentModal({ isOpen, onClose, token, employee, onPaymen
             title={`Registrar Pago a: ${employee.full_name || `Empleado ID ${employee.id}`}`}
         >
             <div className="text-sm mb-4 p-3 bg-indigo-50 rounded-md border border-indigo-200">
-                <p><strong>Saldo Actual del Empleado (VES):</strong> 
+                <p><strong>Saldo Actual del Empleado:</strong> 
                     <span className={`font-semibold ml-1 ${employee.current_balance_ves >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                         {formatCurrency(employee.current_balance_ves, 'VES')}
                     </span>
@@ -129,7 +129,7 @@ function RecordEmployeePaymentModal({ isOpen, onClose, token, employee, onPaymen
                     <input type="date" name="payment_date" id="payment_date_emp_pay_modal" value={paymentData.payment_date} onChange={handleInputChange} required className="mt-1 input-style"/>
                 </div>
                 <div>
-                    <label htmlFor="amount_paid_ves_emp_pay_modal" className="block text-sm font-medium text-gray-700">Monto Pagado (VES)*</label>
+                    <label htmlFor="amount_paid_ves_emp_pay_modal" className="block text-sm font-medium text-gray-700">Monto Pagado (Bs.S)*</label>
                     <input type="number" name="amount_paid_ves" id="amount_paid_ves_emp_pay_modal" value={paymentData.amount_paid_ves} onChange={handleInputChange} required min="0.01" step="0.01" className="mt-1 input-style" placeholder="Monto en Bolívares"/>
                 </div>
                 <div>
@@ -151,11 +151,11 @@ function RecordEmployeePaymentModal({ isOpen, onClose, token, employee, onPaymen
                 {formError && <p className="text-red-600 text-xs italic text-center py-1 bg-red-50 rounded">{formError}</p>}
                 
                 <div className="pt-4 flex justify-end space-x-3 border-t">
-                    <button type="button" onClick={onClose} className="px-4 py-2 text-sm btn-secondary">Cancelar</button>
+                    <button type="button" onClick={onClose} className="px-5 py-2.5 text-sm font-semibold text-slate-700 bg-slate-200 hover:bg-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-400 transition-all">Cancelar</button>
                     <button 
                         type="submit" 
                         disabled={isSubmitting} 
-                        className="px-4 py-2 text-sm btn-primary disabled:opacity-50"
+                        className="inline-flex items-center gap-x-2 px-3 py-2 text-sm font-semibold text-white bg-gradient-to-br from-sky-500 to-indigo-600 hover:from-sky-600 hover:to-indigo-800 rounded-lg shadow-lg hover:shadow-sky-500/40 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-sky-500 transition-all duration-300 transform hover:-translate-y-px"
                     >
                         {isSubmitting ? 'Registrando Pago...' : 'Confirmar y Registrar Pago'}
                     </button>

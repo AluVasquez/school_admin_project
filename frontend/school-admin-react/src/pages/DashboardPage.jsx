@@ -14,7 +14,7 @@ import {
 
 const StatCard = ({ title, value, isLoading, subtext = null, icon }) => {
     // Lógica para ajustar el tamaño de la fuente basado en la longitud del texto
-    const valueFontSize = value && value.length > 12 ? "text-1xl" : "text-1xl";
+    const valueFontSize = value && value.length > 12 ? "text-1xl" : "text-2xl";
 
     return (
         <div className="bg-white p-5 rounded-xl shadow-md hover:shadow-xl transition-shadow duration-300 flex items-start space-x-4">

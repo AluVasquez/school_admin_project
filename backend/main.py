@@ -105,7 +105,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static") # La guaran
 origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
-     "http://3.92.183.54",
+     "http://3.86.198.25",
 
 ]
 

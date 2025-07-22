@@ -1,3 +1,5 @@
+// frontend/school-admin-react/src/pages/EditEmployeePage.jsx
+
 import React, { useState, useEffect, useCallback, Fragment } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -10,10 +12,15 @@ import {
     assignSalaryComponentToEmployee,
     updateEmployeeSalaryComponentAssignment,
     deleteEmployeeSalaryComponentAssignment,
-    getSalaryComponentDefinitions
+    getSalaryComponentDefinitions,
+    getLoansForEmployee,
+    getEmployeeSeveranceReport,
+    getSalaryHistoryForEmployee
 } from '../services/apiPersonnel';
-import RecordEmployeePaymentModal from '../components/RecordEmployeePaymentModal'; //
-import EmployeeBalanceAdjustmentModal from '../components/EmployeeBalanceAdjustmentModal';  //
+import RecordEmployeePaymentModal from '../components/RecordEmployeePaymentModal';
+import EmployeeBalanceAdjustmentModal from '../components/EmployeeBalanceAdjustmentModal';
+import LoanCreationModal from '../components/LoanCreationModal';
+import Modal from '../components/Modal';
 import { toast } from 'react-toastify';
 
 // --- Headless UI y Heroicons ---
@@ -21,13 +28,16 @@ import { Tab, Dialog, Listbox, Switch, Transition } from '@headlessui/react';
 import { 
     ArrowLeftIcon, UserCircleIcon, BriefcaseIcon, PhoneIcon, ChatBubbleBottomCenterTextIcon, CheckIcon, ChevronUpDownIcon,
     PhotoIcon, ArrowUpTrayIcon, XCircleIcon, ExclamationTriangleIcon, PlusIcon, PencilIcon, TrashIcon,
-    CurrencyDollarIcon, AdjustmentsHorizontalIcon, PowerIcon, CheckCircleIcon, NoSymbolIcon, BanknotesIcon
+    CurrencyDollarIcon, AdjustmentsHorizontalIcon, PowerIcon, CheckCircleIcon, NoSymbolIcon, BanknotesIcon,
+    BanknotesIcon as LoanIcon,
+    ArchiveBoxIcon,
+    CurrencyDollarIcon as SalaryHistoryIcon
 } from '@heroicons/react/24/solid';
 
-// --- Opciones y Constantes (Sin Cambios) ---
+// --- Opciones y Constantes ---
 const CONTRACT_TYPE_OPTIONS = [
     { value: "full_time", label: "Tiempo Completo" }, { value: "part_time", label: "Medio Tiempo" },
-    { value: "hourly", label: "Por Horas" }, { value: "internship",label: "Pasantía" },
+    { value: "hourly", label: "Por Horas" }, { value: "internship", label: "Pasantía" },
     { value: "temporary", label: "Temporal" }, { value: "indefinite", label: "Indefinido" },
     { value: "other", label: "Otro" },
 ];
@@ -48,7 +58,8 @@ const initialEmployeeFormData = {
   additional_notes: '', is_active: true,
   base_salary_amount: '', base_salary_currency: 'VES', pay_frequency: 'monthly', hourly_rate: '',
   current_balance_ves: 0, 
-  accumulated_hours: 0, 
+  accumulated_hours: 0,
+  guaranteed_benefits_ves: 0,
 };
 
 const initialAssignedComponentFormData = {
@@ -64,10 +75,15 @@ const formatCurrency = (amount, currency = 'VES', locale = 'es-VE') => {
     if (currency === 'USD' && locale === 'es-VE') locale = 'en-US';
     return parseFloat(amount).toLocaleString(locale, options);
 };
+const formatDate = (dateString) => {
+    if (!dateString) return 'N/A';
+    const date = new Date(dateString);
+    const userTimezoneOffset = date.getTimezoneOffset() * 60000;
+    return new Date(date.getTime() + userTimezoneOffset).toLocaleDateString('es-VE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+};
 
 
 // --- Componentes de UI Personalizados ---
-
 const CustomListbox = ({ options, value, onChange, placeholder, disabled }) => (
     <Listbox value={value} onChange={onChange} disabled={disabled}>
         <div className="relative">
@@ -95,7 +111,6 @@ const CustomListbox = ({ options, value, onChange, placeholder, disabled }) => (
     </Listbox>
 );
 
-// FormInput ahora con padding horizontal (px-3)
 const FormInput = ({ label, id, ...props }) => (
     <div>
         <label htmlFor={id} className="block text-sm font-medium leading-6 text-gray-900">{label}</label>
@@ -108,7 +123,6 @@ const FormInput = ({ label, id, ...props }) => (
 // --- Componente Principal ---
 
 function EditEmployeePage() {
-    // --- Toda la lógica de negocio (hooks, state, callbacks) se mantiene intacta ---
     const { employeeId } = useParams();
     const { token } = useAuth();
     const navigate = useNavigate();
@@ -138,6 +152,43 @@ function EditEmployeePage() {
 
     const [isRecordPaymentModalOpen, setIsRecordPaymentModalOpen] = useState(false);
     const [isAdjustmentModalOpen, setIsAdjustmentModalOpen] = useState(false);
+    
+    const [loans, setLoans] = useState([]);
+    const [isLoadingLoans, setIsLoadingLoans] = useState(true);
+    const [isLoanModalOpen, setIsLoanModalOpen] = useState(false);
+
+    const [severanceReport, setSeveranceReport] = useState(null);
+    const [isSeveranceModalOpen, setIsSeveranceModalOpen] = useState(false);
+    const [isLoadingSeverance, setIsLoadingSeverance] = useState(false);
+
+    const [salaryHistory, setSalaryHistory] = useState([]);
+    const [isLoadingHistory, setIsLoadingHistory] = useState(true);
+
+    const fetchSalaryHistory = useCallback(async () => {
+        if (!token || !employeeId) return;
+        setIsLoadingHistory(true);
+        try {
+            const data = await getSalaryHistoryForEmployee(token, employeeId);
+            setSalaryHistory(data || []);
+        } catch(err) {
+            toast.error("No se pudo cargar el historial de salarios.");
+        } finally {
+            setIsLoadingHistory(false);
+        }
+    }, [token, employeeId]);
+
+    const fetchLoans = useCallback(async () => {
+        if (!token || !employeeId) return; 
+        setIsLoadingLoans(true);
+        try {
+            const data = await getLoansForEmployee(token, employeeId);
+            setLoans(data || []);
+        } catch(err) {
+            toast.error("No se pudo cargar el historial de préstamos.");
+        } finally {
+            setIsLoadingLoans(false);
+        }
+    }, [token, employeeId]);
 
     const fetchEmployeeData = useCallback(async () => {
         if (!token || !employeeId) return;
@@ -169,6 +220,7 @@ function EditEmployeePage() {
                 hourly_rate: data.hourly_rate !== null && data.hourly_rate !== undefined ? data.hourly_rate.toString() : '',
                 current_balance_ves: data.current_balance_ves !== null && data.current_balance_ves !== undefined ? data.current_balance_ves : 0,
                 accumulated_hours: data.accumulated_hours !== null && data.accumulated_hours !== undefined ? data.accumulated_hours : 0,
+                guaranteed_benefits_ves: data.guaranteed_benefits_ves || 0,
             });
             setCurrentPhotoUrl(data.photo_url ? `${API_BASE_URL}${data.photo_url}` : null);
         } catch (err) { setFormError(err.message); toast.error(`Error al cargar empleado: ${err.message}`); }
@@ -210,8 +262,10 @@ function EditEmployeePage() {
             fetchPositionsForSelect();
             fetchAssignedComponents();
             fetchAvailableDefinitions();
+            fetchLoans();
+            fetchSalaryHistory();
         }
-    }, [token, employeeId, fetchEmployeeData, fetchPositionsForSelect, fetchAssignedComponents, fetchAvailableDefinitions]);
+    }, [token, employeeId, fetchEmployeeData, fetchPositionsForSelect, fetchAssignedComponents, fetchAvailableDefinitions, fetchLoans, fetchSalaryHistory]);
 
     const handleInputChange = (e) => {
         const { name, value, type, checked } = e.target;
@@ -258,9 +312,11 @@ function EditEmployeePage() {
             identity_document: formData.identity_document, birth_date: formData.birth_date || null, gender: formData.gender || null,
             address: formData.address || null, primary_phone: formData.primary_phone, secondary_phone: formData.secondary_phone || null,
             personal_email: formData.personal_email || null, emergency_contact_name: formData.emergency_contact_name || null,
-            emergency_contact_phone: formData.emergency_contact_phone || null, emergency_contact_relationship: formData.emergency_contact_relationship || null,
-            employee_code: formData.employee_code || null, position_id: formData.position_id ? parseInt(formData.position_id) : null,
-            hire_date: formData.hire_date, termination_date: formData.termination_date || null, contract_type: formData.contract_type || null,
+            emergency_contact_phone: formData.emergency_contact_phone || null,
+            emergency_contact_relationship: formData.emergency_contact_relationship || null,
+            employee_code: formData.employee_code || null,
+            position_id: formData.position_id ? parseInt(formData.position_id) : null, hire_date: formData.hire_date,
+            termination_date: formData.termination_date || null, contract_type: formData.contract_type || null,
             user_id: formData.user_id ? parseInt(formData.user_id) : null, photo_url: formData.photo_url || null,
             additional_notes: formData.additional_notes || null, is_active: formData.is_active,
             base_salary_amount: formData.pay_frequency !== 'hourly' && formData.base_salary_amount !== '' ? parseFloat(formData.base_salary_amount) : null,
@@ -271,7 +327,8 @@ function EditEmployeePage() {
         try {
             await updateEmployee(token, employeeId, payload);
             toast.success("Datos del empleado actualizados.");
-            fetchEmployeeData(); 
+            fetchEmployeeData();
+            fetchSalaryHistory();
         } catch (err) { setFormError(err.message); toast.error(`Error al actualizar datos: ${err.message}`);}
         finally { setIsSubmitting(false); }
     };
@@ -307,7 +364,7 @@ function EditEmployeePage() {
         if (!token || !employeeId) { toast.error("Error de datos del empleado o autenticación."); return; }
         if (!componentFormData.component_definition_id) {
             toast.warn("Debe seleccionar una definición de componente."); 
-            setFormComponentError("Seleccione un componente de la lista."); return;
+            setFormComponentError("Seleccione un componente de la lista."); return; 
         }
         const selectedDef = availableDefinitions.find(def => def.id.toString() === componentFormData.component_definition_id);
         if (!selectedDef) { 
@@ -382,10 +439,28 @@ function EditEmployeePage() {
         toast.info("Actualizando datos del empleado después del ajuste de saldo...");
         fetchEmployeeData(); 
     };
-
-    // --- RENDERIZADO MEJORADO ---
     
-    // Estado de Carga Inicial
+    const handleLoanCreated = () => {
+        setIsLoanModalOpen(false);
+        fetchLoans(); 
+        fetchEmployeeData(); 
+    };
+
+    const handleGenerateSeverance = async () => {
+        if (!token || !employeeId) return;
+        setIsLoadingSeverance(true);
+        setIsSeveranceModalOpen(true);
+        try {
+            const reportData = await getEmployeeSeveranceReport(token, employeeId);
+            setSeveranceReport(reportData);
+        } catch (err) {
+            toast.error(`Error generando liquidación: ${err.message}`);
+            setIsSeveranceModalOpen(false);
+        } finally {
+            setIsLoadingSeverance(false);
+        }
+    };
+
     if (isLoading || isLoadingPositions || isLoadingDefinitions) {
         return (
             <div className="p-8 bg-gray-50 min-h-screen">
@@ -405,7 +480,6 @@ function EditEmployeePage() {
         );
     }
     
-    // Estado de Error o No Encontrado
     if (formError || (!formData.first_name && !isLoading && employeeId)) {
         return (
              <div className="flex flex-col items-center justify-center min-h-screen bg-gray-50 p-6">
@@ -424,7 +498,6 @@ function EditEmployeePage() {
         );
     }
     
-    // Renderizado Principal de la Página
     return (
     <div className="bg-gray-50 min-h-screen">
       <form onSubmit={handleSubmit}>
@@ -469,7 +542,7 @@ function EditEmployeePage() {
                         <FormInput label="Fecha de Nacimiento" id="birth_date_emp_edit" name="birth_date" type="date" value={formData.birth_date} onChange={handleInputChange} />
                         <div>
                            <label className="block text-sm font-medium leading-6 text-gray-900">Género</label>
-                            <CustomListbox options={GENDER_OPTIONS} value={formData.gender} onChange={(val) => handleListboxChange('gender', val)} placeholder="Seleccionar género..." />
+                           <CustomListbox options={GENDER_OPTIONS} value={formData.gender} onChange={(val) => handleListboxChange('gender', val)} placeholder="Seleccionar género..." />
                         </div>
                         <div className="sm:col-span-2">
                            <label htmlFor="address_emp_edit" className="block text-sm font-medium leading-6 text-gray-900">Dirección</label>
@@ -487,12 +560,12 @@ function EditEmployeePage() {
                             <FormInput label="Código de Empleado" id="employee_code_emp_edit" name="employee_code" type="text" value={formData.employee_code} onChange={handleInputChange} />
                             <div>
                                 <label className="block text-sm font-medium leading-6 text-gray-900">Cargo (Posición)*</label>
-                                <CustomListbox options={positions.map(p => ({value: p.id.toString(), label: `${p.name} (${p.department?.name})`}))} value={formData.position_id} onChange={(val) => handleListboxChange('position_id', val)} placeholder={isLoadingPositions ? 'Cargando...' : 'Seleccionar cargo...'} disabled={isLoadingPositions} />
+                                 <CustomListbox options={positions.map(p => ({value: p.id.toString(), label: `${p.name} (${p.department?.name})`}))} value={formData.position_id} onChange={(val) => handleListboxChange('position_id', val)} placeholder={isLoadingPositions ? 'Cargando...' : 'Seleccione cargo...'} disabled={isLoadingPositions} />
                             </div>
                             <FormInput label="Fecha de Ingreso*" id="hire_date_emp_edit" name="hire_date" type="date" value={formData.hire_date} onChange={handleInputChange} required />
                             <FormInput label="Fecha de Egreso" id="termination_date_emp_edit" name="termination_date" type="date" value={formData.termination_date} onChange={handleInputChange} />
                             <div>
-                                <label className="block text-sm font-medium leading-6 text-gray-900">Tipo de Contrato</label>
+                                 <label className="block text-sm font-medium leading-6 text-gray-900">Tipo de Contrato</label>
                                 <CustomListbox options={CONTRACT_TYPE_OPTIONS} value={formData.contract_type} onChange={(val) => handleListboxChange('contract_type', val)} placeholder="Seleccionar contrato..." />
                             </div>
                             <FormInput label="ID Usuario del Sistema" id="user_id_emp_edit" name="user_id" type="number" value={formData.user_id} onChange={handleInputChange} placeholder="ID numérico (opcional)" />
@@ -509,6 +582,7 @@ function EditEmployeePage() {
                                 <label className="block text-sm font-medium leading-6 text-gray-900">Moneda Salario/Tarifa</label>
                                 <CustomListbox options={CURRENCIES_OPTIONS} value={formData.base_salary_currency} onChange={(val) => handleListboxChange('base_salary_currency', val)} placeholder="Seleccionar moneda..." />
                             </div>
+
                             {formData.pay_frequency === 'hourly' ? (
                                 <FormInput label="Tarifa por Hora*" id="hourly_rate_emp_edit" name="hourly_rate" type="number" value={formData.hourly_rate} onChange={handleInputChange} min="0" step="0.01" required />
                             ) : (
@@ -529,7 +603,7 @@ function EditEmployeePage() {
                        <FormInput label="Teléfono de Contacto" id="emergency_contact_phone_emp_edit" name="emergency_contact_phone" type="tel" value={formData.emergency_contact_phone} onChange={handleInputChange} />
                        <FormInput label="Parentesco" id="emergency_contact_relationship_emp_edit" name="emergency_contact_relationship" type="text" value={formData.emergency_contact_relationship} onChange={handleInputChange} />
                     </Tab.Panel>
-
+                    
                     {/* Panel de Otros */}
                     <Tab.Panel className="space-y-6">
                         <div>
@@ -550,12 +624,12 @@ function EditEmployeePage() {
                 </Tab.Group>
               </div>
 
-              {/* --- Sección de Componentes Salariales --- */}
+              {/* Sección de Componentes Salariales */}
               <div className="bg-white p-4 sm:p-6 rounded-xl shadow-sm">
                  <div className="flex flex-col sm:flex-row justify-between sm:items-center mb-4 gap-2">
                     <h2 className="text-lg font-semibold text-gray-900">Componentes Salariales Asignados</h2>
                     <button type="button" onClick={openComponentModalForCreate} className="inline-flex items-center gap-x-1.5 rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600">
-                        <PlusIcon className="-ml-0.5 h-5 w-5" /> Asignar Componente
+                         <PlusIcon className="-ml-0.5 h-5 w-5" /> Asignar Componente
                     </button>
                  </div>
                  <div className="space-y-3">
@@ -563,15 +637,15 @@ function EditEmployeePage() {
                     {!isLoadingAssignedComponents && assignedSalaryComponents.length === 0 && (
                         <div className="text-center py-6 px-4 bg-gray-50 rounded-lg">
                             <CurrencyDollarIcon className="mx-auto h-10 w-10 text-gray-400"/>
-                            <h3 className="mt-2 text-sm font-semibold text-gray-900">Sin Componentes Asignados</h3>
-                            <p className="mt-1 text-sm text-gray-500">Este empleado solo recibe su salario base.</p>
+                             <h3 className="mt-2 text-sm font-semibold text-gray-900">Sin Componentes Asignados</h3>
+                             <p className="mt-1 text-sm text-gray-500">Este empleado solo recibe su salario base.</p>
                         </div>
                     )}
                     {assignedSalaryComponents.map(assignedComp => {
                         const def = assignedComp.component_definition;
                         let valueDisplay = "N/A";
                         if(def) {
-                           const value = assignedComp.override_value ?? def.default_value;
+                            const value = assignedComp.override_value ?? def.default_value;
                            const currency = assignedComp.override_currency ?? def.default_currency;
                            if (value !== null) {
                                 valueDisplay = def.calculation_type === 'percentage_of_base_salary'
@@ -581,18 +655,18 @@ function EditEmployeePage() {
                         }
                         return (
                             <div key={assignedComp.id} className={`p-3 rounded-lg border ${!assignedComp.is_active ? 'bg-gray-50 opacity-70' : 'bg-white'}`}>
-                                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                                 <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
                                     <div className="flex-1">
                                         <p className="font-semibold text-gray-800 flex items-center gap-2">
-                                           {def?.name || 'Componente Desconocido'}
+                                            {def?.name || 'Componente Desconocido'}
                                            <span className={`inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ${def?.component_type === 'earning' ? 'bg-blue-50 text-blue-700 ring-blue-600/20' : 'bg-red-50 text-red-700 ring-red-600/10'}`}>{def?.component_type === 'earning' ? 'Asignación' : 'Deducción'}</span>
                                         </p>
                                         <p className="text-sm text-gray-600">
-                                            {valueDisplay}
+                                             {valueDisplay}
                                             <span className="text-xs text-gray-400">{assignedComp.override_value !== null ? ' (Personalizado)' : ' (Por Defecto)'}</span>
                                         </p>
                                         {!assignedComp.is_active && <p className="text-xs font-bold text-yellow-700 mt-1">ASIGNACIÓN INACTIVA</p>}
-                                    </div>
+                                     </div>
                                     <div className="flex items-center space-x-3 flex-shrink-0 self-end sm:self-center">
                                        <button type="button" onClick={() => openComponentModalForEdit(assignedComp)} className="p-1 rounded-full text-gray-400 hover:text-indigo-600 hover:bg-gray-100 transition-colors"><PencilIcon className="w-5 h-5"/></button>
                                        <button type="button" onClick={() => handleToggleAssignedComponentActive(assignedComp)} className={`p-1 rounded-full transition-colors ${assignedComp.is_active ? 'text-gray-400 hover:text-yellow-600 hover:bg-gray-100' : 'text-gray-400 hover:text-green-600 hover:bg-gray-100'}`}>{assignedComp.is_active ? <PowerIcon className="w-5 h-5"/> : <CheckCircleIcon className="w-5 h-5"/>}</button>
@@ -605,24 +679,123 @@ function EditEmployeePage() {
                  </div>
               </div>
 
-               {/* --- Sección de Pagos y Ajustes de Saldo --- */}
+              {/* Sección de Préstamos y Adelantos */}
+              <div className="bg-white p-4 sm:p-6 rounded-xl shadow-sm">
+                 <div className="flex flex-col sm:flex-row justify-between sm:items-center mb-4 gap-2">
+                    <h2 className="text-lg font-semibold text-gray-900">Historial de Préstamos y Adelantos</h2>
+                    <button type="button" onClick={() => setIsLoanModalOpen(true)} className="inline-flex items-center gap-x-1.5 rounded-md bg-sky-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-sky-500">
+                         <LoanIcon className="-ml-0.5 h-5 w-5" /> Registrar Préstamo/Adelanto
+                    </button>
+                 </div>
+                 <div className="space-y-3">
+                    {isLoadingLoans ? <p className="text-sm text-center text-gray-500 py-4">Cargando...</p> :
+                     loans.length === 0 ? (
+                        <div className="text-center py-6 px-4 bg-gray-50 rounded-lg">
+                            <LoanIcon className="mx-auto h-10 w-10 text-gray-400"/>
+                            <h3 className="mt-2 text-sm font-semibold text-gray-900">Sin Préstamos Registrados</h3>
+                            <p className="mt-1 text-sm text-gray-500">Este empleado no tiene un historial de préstamos o adelantos.</p>
+                        </div>
+                     ) : (
+                        <div className="overflow-x-auto">
+                            <table className="min-w-full text-xs">
+                                <thead className="bg-gray-50">
+                                    <tr>
+                                        <th className="px-3 py-2 text-left font-semibold">Fecha</th>
+                                        <th className="px-3 py-2 text-left font-semibold">Tipo</th>
+                                        <th className="px-3 py-2 text-left font-semibold">Descripción</th>
+                                        <th className="px-3 py-2 text-right font-semibold">Monto Total</th>
+                                        <th className="px-3 py-2 text-right font-semibold">Pagado</th>
+                                        <th className="px-3 py-2 text-right font-semibold">Cuota</th>
+                                        <th className="px-3 py-2 text-center font-semibold">Estado</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-100">
+                                    {loans.map(loan => (
+                                        <tr key={loan.id}>
+                                            <td className="px-3 py-2">{formatDate(loan.request_date)}</td>
+                                            <td className="px-3 py-2 font-medium">{loan.loan_type === 'loan' ? 'Préstamo' : 'Adelanto'}</td>
+                                            <td className="px-3 py-2 max-w-xs truncate" title={loan.description}>{loan.description}</td>
+                                            <td className="px-3 py-2 text-right">{formatCurrency(loan.total_amount_ves)}</td>
+                                            <td className="px-3 py-2 text-right">{formatCurrency(loan.amount_paid_ves)}</td>
+                                            <td className="px-3 py-2 text-right">{formatCurrency(loan.installment_amount_ves)}</td>
+                                            <td className="px-3 py-2 text-center">
+                                                <span className={`px-2 py-0.5 font-medium rounded-full text-xs ${
+                                                    {'active': 'bg-blue-100 text-blue-800', 'pending': 'bg-yellow-100 text-yellow-800', 'paid': 'bg-green-100 text-green-800', 'cancelled': 'bg-gray-200 text-gray-700'}[loan.status]
+                                                }`}>{loan.status}</span>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                     )}
+                 </div>
+              </div>
+              
+              {/* Sección de Historial de Salarios */}
+              <div className="bg-white p-4 sm:p-6 rounded-xl shadow-sm">
+                 <div className="flex flex-col sm:flex-row justify-between sm:items-center mb-4 gap-2">
+                    <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                        <SalaryHistoryIcon className="w-6 h-6 text-green-600" /> Historial de Salarios
+                    </h2>
+                 </div>
+                 <div className="space-y-3">
+                    {isLoadingHistory ? <p className="text-sm text-center text-gray-500 py-4">Cargando historial...</p> :
+                     salaryHistory.length === 0 ? (
+                        <div className="text-center py-6 px-4 bg-gray-50 rounded-lg">
+                            <SalaryHistoryIcon className="mx-auto h-10 w-10 text-gray-400"/>
+                            <h3 className="mt-2 text-sm font-semibold text-gray-900">Sin Historial de Salarios</h3>
+                            <p className="mt-1 text-sm text-gray-500">No se han registrado cambios de salario para este empleado.</p>
+                        </div>
+                     ) : (
+                        <div className="overflow-x-auto">
+                            <table className="min-w-full text-xs">
+                                <thead className="bg-gray-50">
+                                    <tr>
+                                        <th className="px-3 py-2 text-left font-semibold">Fecha Efectiva</th>
+                                        <th className="px-3 py-2 text-right font-semibold">Salario Base / Tarifa</th>
+                                        <th className="px-3 py-2 text-left font-semibold">Frecuencia</th>
+                                        <th className="px-3 py-2 text-left font-semibold">Registrado Por</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-100">
+                                    {salaryHistory.map(record => (
+                                        <tr key={record.id}>
+                                            <td className="px-3 py-2">{formatDate(record.effective_date)}</td>
+                                            <td className="px-3 py-2 text-right font-mono">
+                                                {record.pay_frequency === 'hourly' 
+                                                    ? formatCurrency(record.hourly_rate, record.base_salary_currency) + " /hr"
+                                                    : formatCurrency(record.base_salary_amount, record.base_salary_currency)
+                                                }
+                                            </td>
+                                            <td className="px-3 py-2 capitalize">{record.pay_frequency}</td>
+                                            <td className="px-3 py-2 text-gray-500" title={record.created_by_user.email}>{record.created_by_user.full_name}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                     )}
+                 </div>
+              </div>
+
               <div className="bg-white p-4 sm:p-6 rounded-xl shadow-sm">
                  <h2 className="text-lg font-semibold text-gray-900 mb-4">Pagos y Ajustes de Saldo</h2>
                  <div className="flex flex-col sm:flex-row items-center justify-between p-4 rounded-lg bg-gray-50 border border-gray-200">
                     <div>
                         <p className="text-sm text-gray-600">Saldo Actual</p>
                         <p className={`text-2xl font-bold ${parseFloat(formData.current_balance_ves || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                            {formatCurrency(parseFloat(formData.current_balance_ves || 0), 'VES')}
+                           {formatCurrency(parseFloat(formData.current_balance_ves || 0), 'VES')}
                         </p>
-                        <p className="text-xs text-gray-500">{parseFloat(formData.current_balance_ves || 0) > 0 ? "La escuela le debe al empleado." : parseFloat(formData.current_balance_ves || 0) < 0 ? "El empleado le debe a la escuela." : "El saldo está en cero."}</p>
+                        <p className="text-xs text-gray-500">{parseFloat(formData.current_balance_ves || 0) > 0.001 ? "La escuela le debe al empleado." : parseFloat(formData.current_balance_ves || 0) < -0.001 ? "El empleado le debe a la escuela." : "El saldo está en cero."}</p>
                     </div>
                     <div className="flex gap-3 mt-4 sm:mt-0">
-                         <button type="button" onClick={() => setIsRecordPaymentModalOpen(true)} disabled={parseFloat(formData.current_balance_ves || 0) <= 0} className="inline-flex items-center gap-x-1.5 rounded-md bg-green-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-green-500 disabled:bg-gray-300 disabled:cursor-not-allowed">
+                        <button type="button" onClick={() => setIsRecordPaymentModalOpen(true)} disabled={parseFloat(formData.current_balance_ves || 0) <= 0} className="inline-flex items-center gap-x-1.5 rounded-md bg-green-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-green-500 disabled:bg-gray-300 disabled:cursor-not-allowed">
                              <BanknotesIcon className="-ml-0.5 h-5 w-5" /> Registrar Pago
                          </button>
                          <button type="button" onClick={() => setIsAdjustmentModalOpen(true)} className="inline-flex items-center gap-x-1.5 rounded-md bg-yellow-500 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-yellow-400">
                              <AdjustmentsHorizontalIcon className="-ml-0.5 h-5 w-5" /> Ajustar Saldo
-                         </button>
+                        </button>
                     </div>
                  </div>
               </div>
@@ -637,7 +810,7 @@ function EditEmployeePage() {
                   <h3 className="text-lg font-semibold text-gray-900">Acciones</h3>
                   <div className="mt-6 space-y-4">
                     <button type="submit" disabled={isSubmitting || isLoading || isLoadingPositions || isUploadingPhoto} className="w-full inline-flex items-center justify-center gap-x-2 rounded-md bg-indigo-600 px-3.5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600 disabled:bg-indigo-300 disabled:cursor-wait">
-                      {isSubmitting ? 'Guardando...' : 'Guardar Cambios'}
+                        {isSubmitting ? 'Guardando...' : 'Guardar Cambios'}
                     </button>
                     <Link to="/personnel/employees" className="w-full block text-center rounded-md bg-white px-3.5 py-2.5 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50">
                       Cancelar
@@ -652,17 +825,46 @@ function EditEmployeePage() {
                   <div className="mt-4 flex flex-col items-center gap-4">
                       <img src={currentPhotoUrl || "/placeholder-avatar.png"} alt="Foto de perfil" className="w-32 h-32 rounded-full object-cover border-4 border-white shadow-lg"/>
                       <input type="file" name="photo_file" id="photo_file_emp_edit" accept="image/*" onChange={handlePhotoFileChange} className="sr-only"/>
-                      <label htmlFor="photo_file_emp_edit" className="cursor-pointer text-sm font-semibold text-indigo-600 hover:text-indigo-500">
-                          {selectedPhotoFile ? `Archivo seleccionado: ${selectedPhotoFile.name}` : 'Seleccionar una imagen'}
-                      </label>
+                       <label htmlFor="photo_file_emp_edit" className="cursor-pointer text-sm font-semibold text-indigo-600 hover:text-indigo-500">
+                          {selectedPhotoFile ? `Archivo: ${selectedPhotoFile.name}` : 'Seleccionar una imagen'}
+                       </label>
                       {selectedPhotoFile && (
                           <button type="button" onClick={handlePhotoUpload} disabled={isUploadingPhoto} className="inline-flex items-center gap-x-1.5 rounded-md bg-indigo-100 px-3 py-2 text-sm font-semibold text-indigo-600 shadow-sm hover:bg-indigo-200 disabled:opacity-50">
-                              <ArrowUpTrayIcon className="-ml-0.5 h-5 w-5"/>
-                              {isUploadingPhoto ? "Subiendo..." : "Subir Ahora"}
+                             <ArrowUpTrayIcon className="-ml-0.5 h-5 w-5"/>
+                             {isUploadingPhoto ? "Subiendo..." : "Subir Ahora"}
                           </button>
                       )}
                       {photoUploadError && <p className="text-red-500 text-xs mt-1">{photoUploadError}</p>}
                   </div>
+                </div>
+
+                {/* Card de Prestaciones y Liquidación */}
+                <div className="mt-8 bg-white p-6 rounded-xl shadow-sm">
+                    <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                        <ArchiveBoxIcon className="w-5 h-5 text-gray-400" />
+                        Prestaciones y Liquidación
+                    </h3>
+                    <div className="mt-4 space-y-3 text-sm">
+                        <div className="flex justify-between items-center">
+                            <span className="font-medium text-gray-600">Garantía Acumulada:</span>
+                            <span className="font-bold text-lg text-gray-800">
+                                {formatCurrency(formData.guaranteed_benefits_ves || 0)}
+                            </span>
+                        </div>
+                        <p className="text-xs text-gray-500 bg-gray-50 p-2 rounded-md">
+                            Este es el monto acumulado por abonos trimestrales y días adicionales.
+                        </p>
+                        <div className="pt-3 border-t">
+                            <button
+                                type="button"
+                                onClick={handleGenerateSeverance}
+                                disabled={isSubmitting}
+                                className="w-full inline-flex items-center justify-center gap-x-2 rounded-md bg-orange-600 px-3.5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-orange-500 disabled:bg-orange-300"
+                            >
+                                Calcular Liquidación Final
+                            </button>
+                        </div>
+                    </div>
                 </div>
 
               </div>
@@ -672,14 +874,25 @@ function EditEmployeePage() {
       </form>
       
       {/* --- MODALES --- */}
-      {/* Modal para Asignar/Editar Componentes (usando Headless UI Dialog) */}
+      <RecordEmployeePaymentModal isOpen={isRecordPaymentModalOpen} onClose={() => setIsRecordPaymentModalOpen(false)} token={token} employee={{id: parseInt(employeeId), full_name: `${formData.first_name} ${formData.last_name}`, current_balance_ves: parseFloat(formData.current_balance_ves || 0)}} onPaymentRecorded={handlePaymentSuccessfullyRecorded} />
+      <EmployeeBalanceAdjustmentModal isOpen={isAdjustmentModalOpen} onClose={() => setIsAdjustmentModalOpen(false)} token={token} employee={{id: parseInt(employeeId), full_name: `${formData.first_name} ${formData.last_name}`, current_balance_ves: parseFloat(formData.current_balance_ves || 0)}} onAdjustmentRecorded={handleAdjustmentRecorded} />
+      
+      <LoanCreationModal 
+            isOpen={isLoanModalOpen}
+            onClose={() => setIsLoanModalOpen(false)}
+            token={token}
+            employeeId={employeeId}
+            onLoanCreated={handleLoanCreated}
+        />
+
+      {/* Modal para Asignar/Editar Componentes */}
         <Transition appear show={isComponentModalOpen} as={Fragment}>
             <Dialog as="div" className="relative z-10" onClose={closeComponentModal}>
                 <Transition.Child as={Fragment} enter="ease-out duration-300" enterFrom="opacity-0" enterTo="opacity-100" leave="ease-in duration-200" leaveFrom="opacity-100" leaveTo="opacity-0">
                     <div className="fixed inset-0 bg-black/25" />
                 </Transition.Child>
                 <div className="fixed inset-0 overflow-y-auto">
-                    <div className="flex min-h-full items-center justify-center p-4 text-center">
+                     <div className="flex min-h-full items-center justify-center p-4 text-center">
                         <Transition.Child as={Fragment} enter="ease-out duration-300" enterFrom="opacity-0 scale-95" enterTo="opacity-100 scale-100" leave="ease-in duration-200" leaveFrom="opacity-100 scale-100" leaveTo="opacity-0 scale-95">
                             <Dialog.Panel className="w-full max-w-lg transform overflow-hidden rounded-2xl bg-white p-6 text-left align-middle shadow-xl transition-all">
                                 <Dialog.Title as="h3" className="text-lg font-medium leading-6 text-gray-900">{editingAssignedComponent ? 'Editar Asignación' : 'Asignar Componente'}</Dialog.Title>
@@ -692,7 +905,7 @@ function EditEmployeePage() {
                                             onChange={(val) => setComponentFormData(prev => ({...prev, component_definition_id: val}))}
                                             placeholder={isLoadingDefinitions ? "Cargando..." : "Seleccione una definición..."}
                                             disabled={isLoadingDefinitions || !!editingAssignedComponent}
-                                        />
+                                         />
                                         {editingAssignedComponent && <p className="text-xs text-gray-500 mt-1">La definición no se puede cambiar. Para ello, elimine y cree una nueva asignación.</p>}
                                      </div>
                                       {componentFormData.component_definition_id && (() => { 
@@ -712,15 +925,13 @@ function EditEmployeePage() {
                                               return <FormInput label="Valor Personalizado (%)" type="number" name="override_value" value={componentFormData.override_value} onChange={handleComponentFormInputChange} step="0.0001" min="0" max="1" placeholder={`Ej: 0.1 para 10%. Defecto: ${(selectedDef.default_value * 100).toFixed(2)}%`} />;
                                           }
                                       })()}
-                                      <Switch.Group as="div" className="flex items-center justify-between pt-2">
+                                     <Switch.Group as="div" className="flex items-center justify-between pt-2">
                                           <Switch.Label className="text-sm font-medium text-gray-700">Asignación Activa</Switch.Label>
-                                          <Switch checked={componentFormData.is_active} onChange={(val) => setComponentFormData(p => ({...p, is_active: val}))} className={`${componentFormData.is_active ? 'bg-indigo-600' : 'bg-gray-200'} relative inline-flex h-6 w-11 items-center rounded-full transition-colors`}>
-                                              <span className={`${componentFormData.is_active ? 'translate-x-6' : 'translate-x-1'} inline-block h-4 w-4 transform rounded-full bg-white transition-transform`} />
-                                          </Switch>
+                                          <Switch checked={componentFormData.is_active} onChange={(val) => setComponentFormData(p => ({...p, is_active: val}))} className={`${componentFormData.is_active ? 'bg-indigo-600' : 'bg-gray-200'} relative inline-flex h-6 w-11 items-center rounded-full transition-colors`}><span className={`${componentFormData.is_active ? 'translate-x-6' : 'translate-x-1'} inline-block h-4 w-4 transform rounded-full bg-white transition-transform`} /></Switch>
                                       </Switch.Group>
                                      {formComponentError && <p className="text-red-500 text-sm text-center">{formComponentError}</p>}
                                      <div className="mt-6 flex justify-end space-x-3">
-                                         <button type="button" onClick={closeComponentModal} className="rounded-md bg-white px-3.5 py-2.5 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50">Cancelar</button>
+                                          <button type="button" onClick={closeComponentModal} className="rounded-md bg-white px-3.5 py-2.5 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50">Cancelar</button>
                                          <button type="submit" disabled={isSubmittingComponent || isLoadingDefinitions} className="inline-flex items-center justify-center gap-x-2 rounded-md bg-indigo-600 px-3.5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 disabled:opacity-50"> {isSubmittingComponent ? 'Guardando...' : 'Guardar'}</button>
                                      </div>
                                  </form>
@@ -731,9 +942,27 @@ function EditEmployeePage() {
             </Dialog>
         </Transition>
 
-      {/* Se mantienen los modales de Pago y Ajuste, que se asume ya están bien diseñados o son menos prioritarios */}
-      <RecordEmployeePaymentModal isOpen={isRecordPaymentModalOpen} onClose={() => setIsRecordPaymentModalOpen(false)} token={token} employee={{id: parseInt(employeeId), full_name: `${formData.first_name} ${formData.last_name}`, current_balance_ves: parseFloat(formData.current_balance_ves || 0)}} onPaymentRecorded={handlePaymentSuccessfullyRecorded} />
-      <EmployeeBalanceAdjustmentModal isOpen={isAdjustmentModalOpen} onClose={() => setIsAdjustmentModalOpen(false)} token={token} employee={{id: parseInt(employeeId), full_name: `${formData.first_name} ${formData.last_name}`, current_balance_ves: parseFloat(formData.current_balance_ves || 0)}} onAdjustmentRecorded={handleAdjustmentRecorded} />
+        <Modal isOpen={isSeveranceModalOpen} onClose={() => setIsSeveranceModalOpen(false)} title="Reporte de Liquidación de Prestaciones Sociales">
+            {isLoadingSeverance ? <p className="text-center p-4">Calculando...</p> : 
+            severanceReport ? (
+                <div className="text-sm space-y-4">
+                    <div className="p-3 bg-gray-50 rounded-lg">
+                        <p><strong>Empleado:</strong> {severanceReport.employee_info.full_name}</p>
+                        <p><strong>Fechas:</strong> {formatDate(severanceReport.employee_info.hire_date)} al {formatDate(severanceReport.employee_info.termination_date)}</p>
+                    </div>
+                    <div>
+                        <p className="flex justify-between"><span>Monto por Garantía Acumulada:</span> <span className="font-medium">{formatCurrency(severanceReport.calculation_details.total_guaranteed_benefits)}</span></p>
+                        <p className="flex justify-between"><span>Monto por Cálculo Retroactivo (Art. 142.c):</span> <span className="font-medium">{formatCurrency(severanceReport.calculation_details.retroactive_calculation_amount)}</span></p>
+                    </div>
+                    <div className="mt-4 pt-4 border-t text-center">
+                        <p className="text-xs text-gray-500 uppercase">Monto a Pagar (El Mayor de los Dos)</p>
+                        <p className="text-2xl font-bold text-green-600">{formatCurrency(severanceReport.calculation_details.final_amount_to_pay_lottt)}</p>
+                    </div>
+                </div>
+             ) : <p className="text-center p-4">No se pudo generar el reporte.</p>
+            }
+        </Modal>
+
     </div>
   );
 }

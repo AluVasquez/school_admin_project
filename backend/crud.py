@@ -1,3 +1,5 @@
+# backend/crud.py
+
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_, and_, UniqueConstraint, func as sql_func, extract
@@ -5,16 +7,15 @@ from sqlalchemy.exc import IntegrityError
 from typing import Optional, List, Dict, Any, Literal, Tuple
 from datetime import date, timedelta, datetime
 from dateutil.relativedelta import relativedelta
+
 import pytz
 import json
 import calendar
 from .app_config import settings
 
 from . import models, schemas
-from .models import Currency, Invoice, InvoiceItem, InvoiceStatus, CreditNote, CreditNoteItem, AppliedChargeStatus, EmployeePayment, Payslip
+from .models import Currency, Invoice, InvoiceItem, InvoiceStatus, CreditNote, CreditNoteItem, AppliedChargeStatus, EmployeePayment, Payslip, EmployeeLoan, LoanType, LoanStatus, Employee, SalaryHistory, EmployeeBalanceAdjustmentType, PayableItemStatus
 from .security import get_password_hash
-
-
 
 class BusinessLogicError(Exception):
     def __init__(self, detail: str):
@@ -32,7 +33,6 @@ class ChargeConceptInUseError(BusinessLogicError):
 
 class AppliedChargeUpdateNotAllowedError(BusinessLogicError):
     pass
-
 
 
 def get_user_by_email(db: Session, email: str) -> Optional[models.User]:
@@ -221,7 +221,7 @@ def get_representatives(
     current_usd_to_ves_rate = latest_usd_rate_model.rate if latest_usd_rate_model and latest_usd_rate_model.rate else None
 
     if current_usd_to_ves_rate is None:
-        print(f"ADVERTENCIA (crud.get_representatives): No se encontró tasa USD->VES para la fecha {today_in_venezuela}.")
+        print(f"ADVERTENCIA (crud.get_representatives): No se encontró tasa USD->Bs.S para la fecha {today_in_venezuela}.")
 
     # Procesar representantes: calcular saldos y convertir a schemas
     representatives_with_balances: List[schemas.RepresentativeResponse] = []
@@ -1774,12 +1774,11 @@ def create_payment(db: Session, payment_in: schemas.PaymentCreate) -> models.Pay
                     raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Tasa de cambio (del pago) no disponible para procesar asignaciones.")
                 amount_to_allocate_in_ves = round(amount_to_allocate_in_payment_currency * exchange_rate_value, 2)
             
-            # --- MODIFICACIÓN CLAVE AQUÍ ---
             balance_due_ves_for_charge: float
             if db_applied_charge.is_indexed:
                 pending_debt_original_curr = db_applied_charge.amount_due_original_currency - db_applied_charge.amount_paid_original_currency_equivalent
                 
-                # Necesitamos la tasa de la moneda original del CARGO a VES, en la FECHA DEL PAGO
+                # Necesita la tasa de la moneda original del CARGO a VES, en la FECHA DEL PAGO
                 rate_model_charge_currency_to_ves = get_latest_exchange_rate(
                     db,
                     from_currency=db_applied_charge.original_concept_currency,
@@ -1795,7 +1794,6 @@ def create_payment(db: Session, payment_in: schemas.PaymentCreate) -> models.Pay
                 balance_due_ves_for_charge = round(pending_debt_original_curr * current_rate_for_charge_debt, 2)
             else: # Cargo originalmente en VES
                 balance_due_ves_for_charge = round(db_applied_charge.amount_due_ves_at_emission - db_applied_charge.amount_paid_ves, 2)
-            # --- FIN DE MODIFICACIÓN CLAVE ---
 
             if amount_to_allocate_in_ves > balance_due_ves_for_charge + 0.001: #
                 raise HTTPException(
@@ -2192,7 +2190,7 @@ def get_representative_account_statement(db: Session, representative_id: int) ->
     if current_usd_to_ves_rate is None:
         # Considera cómo manejar esto: ¿lanzar error o permitir N/A en campos calculados?
         # Por ahora, permitiremos N/A si la tasa no está, y el frontend mostrará advertencia.
-        print(f"ADVERTENCIA: No se encontró tasa USD->VES actual para el estado de cuenta del representante ID {representative_id}. Los cálculos indexados pueden no estar disponibles.")
+        print(f"ADVERTENCIA: No se encontró tasa USD->Bs.S actual para el estado de cuenta del representante ID {representative_id}. Los cálculos indexados pueden no estar disponibles.")
 
     # 2. Obtener todos los cargos aplicados para los estudiantes de este representante
     #    Cargamos relaciones necesarias para los detalles.
@@ -2720,7 +2718,7 @@ def get_revenue_for_period_ves(db: Session, start_date: date, end_date: date) ->
 
 def get_total_outstanding_debt_ves(db: Session) -> float:
     """
-    Calcula la deuda pendiente total en VES, indexando los cargos en USD a la tasa actual.
+    Calcula la deuda pendiente total en Bs.S, indexando los cargos en USD a la tasa actual.
     """
     # Obtener la tasa de cambio USD -> VES más reciente
     # Asumimos que "USD" es la principal moneda extranjera a indexar
@@ -2733,7 +2731,7 @@ def get_total_outstanding_debt_ves(db: Session) -> float:
         # O podríamos lanzar una excepción o devolver un indicador de que el cálculo es parcial.
         # Para simplificar, si no hay tasa, solo sumaremos los cargos en VES.
         # Esto debería ser manejado con más robustez en un sistema real (ej. forzar registro de tasa).
-        print("ADVERTENCIA: No se encontró tasa USD->VES actual para calcular la deuda total pendiente. El resultado podría ser incompleto.")
+        print("ADVERTENCIA: No se encontró tasa USD->Bs.S actual para calcular la deuda total pendiente. El resultado podría ser incompleto.")
         # Alternativamente, podrías buscar la última tasa disponible sin importar la fecha, pero esto
         # no sería "la tasa actual del día".
         # O usar una tasa de fallback si la lógica de negocio lo permite.
@@ -3024,7 +3022,7 @@ def get_monthly_billing_payment_summary(db: Session, months_count: int = 12) -> 
         .all()
 
     for row in charges_by_month:
-        period_str = f"{row.year:04d}-{row.month:02d}"
+        period_str = f"{int(row.year):04d}-{int(row.month):02d}"
         if period_str in results_map:
             results_map[period_str].total_charged_ves_emission = round(float(row.total_charged or 0.0), 2)
 
@@ -3040,7 +3038,7 @@ def get_monthly_billing_payment_summary(db: Session, months_count: int = 12) -> 
         .all()
 
     for row in payments_by_month:
-        period_str = f"{row.year:04d}-{row.month:02d}"
+        period_str = f"{int(row.year):04d}-{int(row.month):02d}"
         if period_str in results_map:
             results_map[period_str].total_paid_in_period_ves = round(float(row.total_paid or 0.0), 2)
             
@@ -4257,7 +4255,8 @@ def get_employees(
     position_id: Optional[int] = None,
     department_id: Optional[int] = None,
     is_active: Optional[bool] = True,
-    balance_filter: Optional[str] = None # NUEVO PARÁMETRO (ej: "positive", "zero", "negative")
+    balance_filter: Optional[str] = None,
+    pay_frequency: Optional[models.EmployeePayFrequency] = None # <-- Parámetro para filtrar
 ) -> Dict[str, Any]:
     query = db.query(models.Employee).options(
         joinedload(models.Employee.position).joinedload(models.Position.department),
@@ -4272,7 +4271,7 @@ def get_employees(
                 models.Employee.first_name.ilike(search_term),
                 models.Employee.last_name.ilike(search_term),
                 models.Employee.identity_document.ilike(search_term),
-                models.Employee.personal_email.ilike(search_term) # Aunque se quite de la vista, el filtro puede seguir aquí
+                models.Employee.personal_email.ilike(search_term)
             )
         )
 
@@ -4285,21 +4284,17 @@ def get_employees(
 
     if is_active is not None:
         query = query.filter(models.Employee.is_active == is_active)
-
-    # --- NUEVA LÓGICA PARA FILTRAR POR SALDO ---
+        
+    # --- LÓGICA DE FILTROS ADICIONALES ---
+    if pay_frequency:
+        query = query.filter(models.Employee.pay_frequency == pay_frequency)
+        
     if balance_filter == "positive":
         query = query.filter(models.Employee.current_balance_ves > 0)
     elif balance_filter == "zero":
-        # Para saldo cero, es mejor considerar un pequeño rango por problemas de precisión con flotantes si fuera necesario,
-        # pero como current_balance_ves se actualiza con sumas y restas de montos de 2 decimales,
-        # la comparación directa con 0 podría ser suficiente.
-        # Si se quiere más robustez para "casi cero":
-        # query = query.filter(models.Employee.current_balance_ves > -0.001, models.Employee.current_balance_ves < 0.001)
         query = query.filter(models.Employee.current_balance_ves == 0)
     elif balance_filter == "negative":
         query = query.filter(models.Employee.current_balance_ves < 0)
-    # Si balance_filter es None o un valor no reconocido, no se aplica filtro de saldo.
-    # --- FIN DE LA NUEVA LÓGICA ---
 
     total = query.count()
     items = query.order_by(models.Employee.last_name, models.Employee.first_name).offset(skip).limit(limit).all()
@@ -4309,12 +4304,42 @@ def get_employees(
 
     return {"items": items, "total": total, "page": current_page, "pages": pages, "limit": limit}
 
-def update_employee(db: Session, employee_id: int, employee_in: schemas.EmployeeUpdate) -> Optional[models.Employee]: # Cambiado
+def update_employee(db: Session, employee_id: int, employee_in: schemas.EmployeeUpdate) -> Optional[models.Employee]:
     db_employee = get_employee(db, employee_id)
     if not db_employee:
         return None
 
     update_data = employee_in.model_dump(exclude_unset=True)
+    
+    # Lista de campos que definen el salario para monitorear cambios.
+    salary_fields = ['base_salary_amount', 'base_salary_currency', 'pay_frequency', 'hourly_rate']
+    
+    # Verificar si al menos uno de los campos salariales está en los datos de actualización
+    # y su nuevo valor es diferente al que ya está en la base de datos.
+    has_salary_changed = any(
+        field in update_data and getattr(db_employee, field) != update_data[field]
+        for field in salary_fields
+    )
+
+    if has_salary_changed:
+        # Si hubo un cambio salarial, creamos un registro histórico.
+        history_entry = models.SalaryHistory(
+            employee_id=employee_id,
+            effective_date=date.today(), # La fecha del cambio es hoy
+            
+            # Usamos los nuevos datos si existen, si no, mantenemos los que ya tenía el empleado.
+            base_salary_amount=update_data.get('base_salary_amount', db_employee.base_salary_amount),
+            base_salary_currency=update_data.get('base_salary_currency', db_employee.base_salary_currency),
+            pay_frequency=update_data.get('pay_frequency', db_employee.pay_frequency),
+            hourly_rate=update_data.get('hourly_rate', db_employee.hourly_rate),
+            
+            change_reason="Actualización de Perfil", # Razón genérica para la actualización.
+            
+            # Idealmente, aquí iría el ID del usuario que realiza la acción.
+            # Por ahora, se asume el ID 1 como un administrador principal.
+            created_by_user_id=1 
+        )
+        db.add(history_entry)
 
     if "identity_document" in update_data and update_data["identity_document"] != db_employee.identity_document:
         if db.query(models.Employee).filter(models.Employee.identity_document == update_data["identity_document"], models.Employee.id != employee_id).first():
@@ -4328,8 +4353,8 @@ def update_employee(db: Session, employee_id: int, employee_in: schemas.Employee
         if db.query(models.Employee).filter(models.Employee.employee_code == update_data["employee_code"], models.Employee.id != employee_id).first():
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Another employee with code '{update_data['employee_code']}' already exists.")
 
-    if "position_id" in update_data and update_data["position_id"] != db_employee.position_id: # position_id
-        db_position = get_position(db, update_data["position_id"]) # get_position
+    if "position_id" in update_data and update_data["position_id"] != db_employee.position_id:
+        db_position = get_position(db, update_data["position_id"])
         if not db_position:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"The new position with ID {update_data['position_id']} does not exist.")
 
@@ -4541,99 +4566,280 @@ def delete_employee_salary_component_assignment(db: Session, assignment_id: int)
     return db_assignment
 
 
+def _calculate_component_amount_in_ves(
+    assigned_comp: models.EmployeeSalaryComponent, 
+    base_salary_monthly_ves: float, 
+    exchange_rate_usd_ves: Optional[float]
+) -> Optional[float]:
+    """
+    Calcula el monto de un componente salarial específico en VES.
+    Esta es una función auxiliar para el cálculo de la nómina.
+    """
+    if not assigned_comp.component_definition:
+        return None  # No se puede calcular sin definición
+
+    definition = assigned_comp.component_definition
+    value_to_use = assigned_comp.override_value if assigned_comp.override_value is not None else definition.default_value
+
+    if value_to_use is None:
+        return None  # No hay valor para calcular
+
+    if definition.calculation_type == models.SalaryComponentCalculationType.FIXED_AMOUNT:
+        currency_to_use = assigned_comp.override_currency if assigned_comp.override_currency is not None else definition.default_currency
+        
+        if currency_to_use == models.Currency.VES:
+            return round(value_to_use, 2)
+        elif currency_to_use == models.Currency.USD:
+            if not exchange_rate_usd_ves:
+                return None  # No se puede calcular si la tasa no está disponible
+            return round(value_to_use * exchange_rate_usd_ves, 2)
+        else:
+            # Otras monedas no soportadas por ahora
+            return None
+            
+    elif definition.calculation_type == models.SalaryComponentCalculationType.PERCENTAGE_OF_BASE_SALARY:
+        # El valor (ej: 0.1 para 10%) se aplica sobre el salario mensual ya convertido a VES
+        if base_salary_monthly_ves is None or base_salary_monthly_ves <= 0:
+            return None  # No se puede calcular porcentaje sin un salario base
+        return round(base_salary_monthly_ves * value_to_use, 2)
+
+    return None
+
+
 # --- Helper para Cálculo de Nómina por Empleado ---
+
 def _calculate_employee_payroll_details_for_run(
     db: Session,
     employee: models.Employee,
-    payroll_run: models.PayrollRun, # Contiene period_start, period_end, pay_frequency_covered, exchange_rate_usd_ves
-    accumulated_hours_input: Optional[float] = None
-) -> Tuple[float, float, float, float, str, Optional[float]]:
+    payroll_run: models.PayrollRun,
+    hours_to_process_for_run: float = 0.0
+) -> Tuple[float, float, float, float, str, float]:
     """
-    Calcula los detalles de la nómina para un empleado en una corrida específica.
-    Devuelve: (base_salary_period_ves, total_earnings_ves, total_deductions_ves, net_to_pay_ves, applied_components_json_str, hours_processed)
+    Calcula los detalles de la nómina para un solo empleado dentro de una corrida específica.
+    Esta función ahora integra salario base, componentes, préstamos y ausencias no remuneradas.
     """
-    if not payroll_run.exchange_rate_usd_ves and employee.base_salary_currency == models.Currency.USD:
-        active_usd_components = db.query(models.EmployeeSalaryComponent).join(models.SalaryComponentDefinition)\
-            .filter(models.EmployeeSalaryComponent.employee_id == employee.id,
-                    models.EmployeeSalaryComponent.is_active == True,
-                    models.SalaryComponentDefinition.calculation_type == models.SalaryComponentCalculationType.FIXED_AMOUNT,
-                    ( (models.EmployeeSalaryComponent.override_currency == models.Currency.USD) | \
-                      ((models.EmployeeSalaryComponent.override_currency == None) & (models.SalaryComponentDefinition.default_currency == models.Currency.USD)) )
-            ).count() > 0
-        if active_usd_components:
-             raise BusinessLogicError(f"Se requiere tasa de cambio USD-VES en la corrida de nómina para procesar al empleado {employee.full_name} debido a componentes en USD.")
-
+    applied_components_list = []
+    total_deductions_ves = 0.0
     base_salary_for_period_ves = 0.0
-    hours_processed_for_run = None
-
-    if employee.pay_frequency == models.EmployeePayFrequency.HOURLY and payroll_run.pay_frequency_covered == models.EmployeePayFrequency.HOURLY:
-        if accumulated_hours_input is None or accumulated_hours_input < 0:
-            raise BusinessLogicError(f"Se requieren horas acumuladas válidas para el empleado por hora: {employee.full_name}")
-        rate_for_hourly = employee.hourly_rate or 0
-        base_salary_for_period_original_currency = rate_for_hourly * accumulated_hours_input
-        if employee.base_salary_currency == models.Currency.USD:
-            if not payroll_run.exchange_rate_usd_ves: raise BusinessLogicError("Tasa USD no definida en PayrollRun para empleado por hora con tarifa en USD.")
-            base_salary_for_period_ves = round(base_salary_for_period_original_currency * payroll_run.exchange_rate_usd_ves, 2)
-        else: # VES
-            base_salary_for_period_ves = round(base_salary_for_period_original_currency, 2)
-        hours_processed_for_run = accumulated_hours_input
+    hours_processed_for_run = 0.0
     
-    elif employee.pay_frequency == payroll_run.pay_frequency_covered and employee.pay_frequency in [models.EmployeePayFrequency.MONTHLY, models.EmployeePayFrequency.FORTNIGHTLY]:
-        base_salary_original_currency = employee.base_salary_amount or 0
-        if employee.pay_frequency == models.EmployeePayFrequency.MONTHLY and payroll_run.pay_frequency_covered == models.EmployeePayFrequency.FORTNIGHTLY:
-            base_salary_original_currency /= 2 
+    exchange_rate_value = payroll_run.exchange_rate_usd_ves
+    if not exchange_rate_value:
+        rate_model = get_latest_exchange_rate(db, from_currency=models.Currency.USD, on_date=payroll_run.period_end_date)
+        if rate_model:
+            exchange_rate_value = rate_model.rate
+
+    # 1. Calcular Salario Base para el Período
+    base_salary_monthly_ves = 0.0
+    if employee.pay_frequency != models.EmployeePayFrequency.HOURLY:
+        if not employee.base_salary_amount or not employee.base_salary_currency:
+            raise BusinessLogicError(f"El empleado {employee.full_name} no tiene un monto o moneda de salario base configurado.")
         
+        base_amount_in_ves = 0
         if employee.base_salary_currency == models.Currency.USD:
-            if not payroll_run.exchange_rate_usd_ves: raise BusinessLogicError("Tasa USD no definida en PayrollRun para empleado con salario en USD.")
-            base_salary_for_period_ves = round(base_salary_original_currency * payroll_run.exchange_rate_usd_ves, 2)
-        else: # VES
-            base_salary_for_period_ves = round(base_salary_original_currency, 2)
+            if not exchange_rate_value:
+                raise BusinessLogicError(f"No se encontró tasa de cambio USD para calcular el salario del empleado {employee.full_name}.")
+            base_amount_in_ves = (employee.base_salary_amount or 0.0) * exchange_rate_value
+        else:
+            base_amount_in_ves = employee.base_salary_amount or 0.0
+
+        if employee.pay_frequency == models.EmployeePayFrequency.FORTNIGHTLY:
+            base_salary_for_period_ves = base_amount_in_ves
+            base_salary_monthly_ves = base_amount_in_ves * 2
+        else:
+            base_salary_for_period_ves = base_amount_in_ves
+            base_salary_monthly_ves = base_amount_in_ves
+    
+    else: # Lógica para empleados por hora
+        if not employee.hourly_rate or not employee.base_salary_currency:
+            raise BusinessLogicError(f"El empleado por hora {employee.full_name} no tiene una tarifa o moneda por hora configurada.")
+        
+        hourly_rate_ves = 0.0
+        if employee.base_salary_currency == models.Currency.USD:
+            if not exchange_rate_value:
+                raise BusinessLogicError(f"No se encontró tasa de cambio USD para calcular la tarifa por hora del empleado {employee.full_name}.")
+            hourly_rate_ves = employee.hourly_rate * exchange_rate_value
+        else:
+            hourly_rate_ves = employee.hourly_rate
+            
+        base_salary_for_period_ves = hourly_rate_ves * hours_to_process_for_run
+        hours_processed_for_run = hours_to_process_for_run
 
     total_earnings_ves = base_salary_for_period_ves
-    total_deductions_ves = 0.0
+
+    # 2. Procesar Componentes Salariales (Asignaciones y Deducciones Fijas)
     
-    # LA CORRECCIÓN ESTÁ AQUÍ: "earning" en minúscula
-    applied_components_list = [{"name": "Salario Base del Período", "type": "earning", "amount_ves": base_salary_for_period_ves}]
-
-    assigned_components = db.query(models.EmployeeSalaryComponent)\
-        .join(models.SalaryComponentDefinition)\
-        .filter(models.EmployeeSalaryComponent.employee_id == employee.id,
-                models.EmployeeSalaryComponent.is_active == True,
-                models.SalaryComponentDefinition.is_active == True)\
-        .all()
-
-    for assignment in assigned_components:
-        comp_def = assignment.component_definition
-        component_value_ves = 0.0
-        value_to_use = assignment.override_value if assignment.override_value is not None else comp_def.default_value
-        currency_of_value = assignment.override_currency if assignment.override_value is not None and assignment.override_currency else comp_def.default_currency
-
-        if value_to_use is None: continue
-
-        if comp_def.calculation_type == models.SalaryComponentCalculationType.FIXED_AMOUNT:
-            if currency_of_value == models.Currency.USD:
-                if not payroll_run.exchange_rate_usd_ves: continue
-                component_value_ves = round(value_to_use * payroll_run.exchange_rate_usd_ves, 2)
-            else: # VES
-                component_value_ves = round(value_to_use, 2)
-        elif comp_def.calculation_type == models.SalaryComponentCalculationType.PERCENTAGE_OF_BASE_SALARY:
-            component_value_ves = round(base_salary_for_period_ves * value_to_use, 2)
-        
-        if comp_def.component_type == models.SalaryComponentType.EARNING:
-            total_earnings_ves += component_value_ves
-        elif comp_def.component_type == models.SalaryComponentType.DEDUCTION:
-            total_deductions_ves += component_value_ves
-        
+    if base_salary_for_period_ves > 0:
         applied_components_list.append({
-            "name": comp_def.name,
-            "type": comp_def.component_type.value,
-            "amount_ves": component_value_ves
+            "name": f"Salario Base ({employee.pay_frequency.value.capitalize()})",
+            "type": "earning",
+            "amount_ves": round(base_salary_for_period_ves, 2)
+        })
+    
+    assigned_components = get_salary_components_for_employee(db, employee.id, is_active=True)
+    for assigned_comp in assigned_components:
+        component_amount_ves = _calculate_component_amount_in_ves(
+            assigned_comp=assigned_comp,
+            base_salary_monthly_ves=base_salary_monthly_ves,
+            exchange_rate_usd_ves=exchange_rate_value
+        )
+        if component_amount_ves is None:
+            continue
+
+        if assigned_comp.component_definition.component_type == models.SalaryComponentType.EARNING:
+            total_earnings_ves += component_amount_ves
+        else:
+            total_deductions_ves += component_amount_ves
+            
+        applied_components_list.append({
+            "name": assigned_comp.component_definition.name,
+            "type": assigned_comp.component_definition.component_type.value,
+            "amount_ves": component_amount_ves
         })
 
+
+    # 3. Calcular el neto disponible ANTES de aplicar préstamos y ausencias
+    net_available_for_deductions = round(total_earnings_ves - total_deductions_ves, 2)
+
+    # 4. Procesar Ausencias No Remuneradas (si aplica)
+    if employee.pay_frequency != models.EmployeePayFrequency.HOURLY:
+        unpaid_days = get_unpaid_leave_days_in_period(
+            db, employee_id=employee.id, start_date=payroll_run.period_start_date, end_date=payroll_run.period_end_date
+        )
+        if unpaid_days > 0:
+            daily_salary = base_salary_monthly_ves / 30
+            unpaid_deduction = round(daily_salary * unpaid_days, 2)
+            
+            # La deducción no puede ser mayor que el neto disponible
+            actual_unpaid_deduction = min(unpaid_deduction, net_available_for_deductions)
+            
+            if actual_unpaid_deduction > 0:
+                total_deductions_ves += actual_unpaid_deduction
+                net_available_for_deductions -= actual_unpaid_deduction
+                applied_components_list.append({
+                    "name": f"Deducción por {unpaid_days} día(s) de Ausencia No Remunerada",
+                    "type": "deduction", "amount_ves": actual_unpaid_deduction
+                })
+                db.query(models.LeaveRequest).join(models.LeaveType).filter(
+                    models.LeaveRequest.employee_id == employee.id,
+                    models.LeaveRequest.status == models.LeaveRequestStatus.APPROVED,
+                    models.LeaveType.is_paid == False,
+                    models.LeaveRequest.payroll_run_id.is_(None)
+                ).update({"payroll_run_id": payroll_run.id}, synchronize_session=False)
+
+    # 5. Procesar Préstamos y Adelantos (usando el neto disponible restante)
+    LOAN_TYPE_LABELS = {
+        models.LoanType.LOAN: "Préstamo por ",
+        models.LoanType.ADVANCE: "Adelanto"
+    }
+
+    active_loans_and_advances = get_active_loans_and_advances_for_employee(db, employee.id)
+    for loan in active_loans_and_advances:
+        if net_available_for_deductions <= 0:
+            break
+
+        remaining_debt = round(loan.total_amount_ves - loan.amount_paid_ves, 2)
+        if remaining_debt <= 0:
+            if loan.status != models.LoanStatus.PAID: 
+                loan.status = models.LoanStatus.PAID
+                db.add(loan)
+            continue
+
+        deduction_this_period = min(loan.installment_amount_ves, remaining_debt, net_available_for_deductions)
+        
+        if deduction_this_period > 0:
+            total_deductions_ves += deduction_this_period
+            net_available_for_deductions -= deduction_this_period
+            
+            loan.amount_paid_ves += deduction_this_period
+            if round(loan.amount_paid_ves, 2) >= round(loan.total_amount_ves, 2):
+                loan.status = models.LoanStatus.PAID
+
+            # Usamos el diccionario para obtener la etiqueta en español
+            loan_type_label = LOAN_TYPE_LABELS.get(loan.loan_type, loan.loan_type.value.capitalize())
+            
+            applied_components_list.append({
+                "name": f" {loan_type_label}: {loan.description[:20]}...",
+                "type": "deduction", "amount_ves": deduction_this_period
+            })
+            db.add(loan)
+
+    # 6. Cálculo Final
     net_to_pay_ves = round(total_earnings_ves - total_deductions_ves, 2)
     applied_components_json_str = json.dumps(applied_components_list)
 
-    return base_salary_for_period_ves, total_earnings_ves, total_deductions_ves, net_to_pay_ves, applied_components_json_str, hours_processed_for_run
+    return (
+        round(base_salary_for_period_ves, 2), round(total_earnings_ves, 2),
+        round(total_deductions_ves, 2), net_to_pay_ves,
+        applied_components_json_str, hours_processed_for_run
+    )
+
+
+def create_employee_loan(db: Session, loan_in: schemas.EmployeeLoanCreate, user_id: int) -> models.EmployeeLoan:
+    db_employee = get_employee(db, loan_in.employee_id)
+    if not db_employee:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Empleado no encontrado.")
+    if not db_employee.is_active:
+        raise BusinessLogicError(detail="No se pueden otorgar préstamos a empleados inactivos.")
+
+    # 1. Crear el registro del Préstamo para seguimiento de cuotas.
+    installments = 1
+    if loan_in.loan_type == models.LoanType.LOAN:
+        if not loan_in.number_of_installments or loan_in.number_of_installments <= 0:
+            raise BusinessLogicError(detail="Para un préstamo, el número de cuotas debe ser mayor que cero.")
+        installments = loan_in.number_of_installments
+    
+    installment_amount = round(loan_in.total_amount_ves / installments, 2)
+
+    db_loan = models.EmployeeLoan(
+        employee_id=loan_in.employee_id,
+        loan_type=loan_in.loan_type,
+        request_date=loan_in.request_date,
+        description=loan_in.description,
+        total_amount_ves=loan_in.total_amount_ves,
+        number_of_installments=installments,
+        installment_amount_ves=installment_amount,
+        status=models.LoanStatus.ACTIVE,
+        created_by_user_id=user_id
+    )
+    db.add(db_loan)
+    
+    # 2. Registrar el PAGO (desembolso) que la escuela hace al empleado.
+    #    Esto generará el historial y el recibo para el otorgamiento del préstamo.
+    payment_description = f"Otorgamiento de {loan_in.loan_type.value.capitalize()}: {loan_in.description}"
+    
+    payment_payload = schemas.EmployeePaymentCreate(
+        employee_id=loan_in.employee_id,
+        payment_date=loan_in.request_date,
+        amount_paid=loan_in.total_amount_ves,
+        currency_paid=models.Currency.VES,
+        payment_method="Préstamo/Adelanto",
+        reference_number=f"Préstamo ID Interno (futuro: {db_loan.id})",
+        notes=payment_description,
+        allocations_details=[]  # No se asigna a deudas existentes, es un pago nuevo
+    )
+
+    create_employee_payment(
+        db=db,
+        payment_in=payment_payload,
+        created_by_user_id=user_id
+    )
+    
+    return db_loan
+
+def get_loans_for_employee(db: Session, employee_id: int) -> List[models.EmployeeLoan]:
+    return db.query(models.EmployeeLoan)\
+        .filter(models.EmployeeLoan.employee_id == employee_id)\
+        .order_by(models.EmployeeLoan.request_date.desc())\
+        .all()
+
+def get_active_loans_and_advances_for_employee(db: Session, employee_id: int) -> List[models.EmployeeLoan]:
+    """Obtiene préstamos activos y adelantos pendientes para ser procesados en la nómina."""
+    return db.query(models.EmployeeLoan)\
+        .filter(models.EmployeeLoan.employee_id == employee_id)\
+        .filter(models.EmployeeLoan.status.in_([LoanStatus.ACTIVE, LoanStatus.PENDING]))\
+        .order_by(models.EmployeeLoan.request_date.asc())\
+        .all()
 
 
 def create_payroll_run_draft(db: Session, payroll_run_in: schemas.PayrollRunCreate, processed_by_user_id: int) -> models.PayrollRun:
@@ -4696,43 +4902,27 @@ def get_payroll_runs(
 
 def process_and_confirm_payroll_run(
     db: Session, payroll_run_id: int, confirming_user_id: int,
-    employee_hours_map: Optional[Dict[int, float]] = None # {employee_id: hours} para los por hora
+    employee_hours_map: Optional[Dict[int, float]] = None
 ) -> models.PayrollRun:
     db_payroll_run = get_payroll_run(db, payroll_run_id)
     if not db_payroll_run:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Corrida de nómina no encontrada.")
     if db_payroll_run.status != models.PayrollRunStatus.DRAFT:
-        raise BusinessLogicError(f"La corrida de nómina ya está en estado '{db_payroll_run.status.value}' y no puede ser reprocesada como borrador.")
+        raise BusinessLogicError(f"La corrida de nómina ya está en estado '{db_payroll_run.status.value}' y no puede ser reprocesada.")
 
-    # Si la tasa no se fijó al crear el DRAFT y es necesaria, intentar obtenerla ahora.
-    # Esto es crucial si hay componentes USD o salarios base en USD.
     if db_payroll_run.exchange_rate_usd_ves is None:
-        # Verificar si es necesaria (ej. algún empleado elegible tiene salario/componente en USD)
-        # Aquí, por simplicidad, si no está, la intentamos obtener para el día final del período.
-        # Una lógica más robusta chequearía si realmente se necesita antes de fallar si no se encuentra.
         rate_model = get_latest_exchange_rate(db, from_currency=models.Currency.USD, to_currency=models.Currency.VES, on_date=db_payroll_run.period_end_date)
         if rate_model and rate_model.rate:
             db_payroll_run.exchange_rate_usd_ves = rate_model.rate
-        else:
-            # Antes de fallar, verificar si realmente se necesita la tasa
-            # (ej. si todos los empleados y sus componentes son VES)
-            # Por ahora, si no se pudo obtener y es potencialmente necesaria, se podría advertir o fallar más adelante empleado por empleado.
-            pass # _calculate_employee_payroll_details_for_run lanzará error si la necesita y no está
 
-    # Obtener empleados elegibles
-    eligible_employees_query = db.query(models.Employee).filter(
+    eligible_employees = db.query(models.Employee).filter(
         models.Employee.is_active == True,
         models.Employee.pay_frequency == db_payroll_run.pay_frequency_covered
-        # Podrías añadir filtro por fecha de ingreso/egreso vs período de nómina
-    )
-    # Si db_payroll_run.target_employee_ids (si implementas ese campo para corridas específicas)
-    # eligible_employees_query = eligible_employees_query.filter(models.Employee.id.in_(db_payroll_run.target_employee_ids))
-    
-    eligible_employees = eligible_employees_query.all()
+    ).all()
 
     if not eligible_employees:
-        db_payroll_run.processing_notes = "No se encontraron empleados elegibles para esta frecuencia de pago en el período."
-        db_payroll_run.status = models.PayrollRunStatus.CONFIRMED # Confirmado, pero vacío
+        db_payroll_run.processing_notes = "No se encontraron empleados elegibles para esta frecuencia de pago."
+        db_payroll_run.status = models.PayrollRunStatus.CONFIRMED
         db_payroll_run.processed_by_user_id = confirming_user_id
         db_payroll_run.processed_at = datetime.utcnow()
         db.add(db_payroll_run)
@@ -4740,54 +4930,65 @@ def process_and_confirm_payroll_run(
         db.refresh(db_payroll_run)
         return db_payroll_run
         
-    # Eliminar detalles previos si se está reprocesando un DRAFT
     db.query(models.PayrollRunEmployeeDetail).filter(models.PayrollRunEmployeeDetail.payroll_run_id == payroll_run_id).delete()
-    db.flush() # Aplicar delete antes de añadir nuevos
+    db.flush()
 
     for emp in eligible_employees:
-        accumulated_hours = None
+        hours_to_process_for_run = 0.0
         if emp.pay_frequency == models.EmployeePayFrequency.HOURLY:
-            if employee_hours_map and emp.id in employee_hours_map:
-                accumulated_hours = employee_hours_map[emp.id]
-            elif emp.accumulated_hours is not None: # Usar las acumuladas en el empleado si no se provee mapa
-                accumulated_hours = emp.accumulated_hours
-            else:
-                # Omitir empleado por hora si no hay horas que procesar, o error si se espera
-                db_payroll_run.processing_notes = (db_payroll_run.processing_notes or "") + f"\nEmpleado por hora {emp.full_name} omitido: sin horas especificadas."
+            hours_to_process_for_run = get_unprocessed_hours_for_employee_in_period(
+                db, employee_id=emp.id,
+                start_date=db_payroll_run.period_start_date,
+                end_date=db_payroll_run.period_end_date
+            )
+            if hours_to_process_for_run <= 0:
                 continue
         
         try:
             base_salary_ves, earnings_ves, deductions_ves, net_ves, components_json, hours_processed = \
-                _calculate_employee_payroll_details_for_run(db, emp, db_payroll_run, accumulated_hours)
+                _calculate_employee_payroll_details_for_run(db, emp, db_payroll_run, hours_to_process_for_run)
 
             detail = models.PayrollRunEmployeeDetail(
-                payroll_run_id=payroll_run_id,
-                employee_id=emp.id,
+                payroll_run_id=payroll_run_id, employee_id=emp.id,
                 base_salary_amount_period_ves=base_salary_ves,
-                total_earnings_ves=earnings_ves,
-                total_deductions_ves=deductions_ves,
+                total_earnings_ves=earnings_ves, total_deductions_ves=deductions_ves,
                 net_amount_to_pay_ves=net_ves,
                 applied_components_details_json=components_json,
                 accumulated_hours_processed=hours_processed
             )
             db.add(detail)
             
-            # Actualizar saldo del empleado
-            emp.current_balance_ves = (emp.current_balance_ves or 0.0) + net_ves
-            if emp.pay_frequency == models.EmployeePayFrequency.HOURLY and hours_processed is not None:
-                emp.accumulated_hours = (emp.accumulated_hours or 0.0) - hours_processed # O resetear a 0
-                if emp.accumulated_hours < 0: emp.accumulated_hours = 0.0
-            db.add(emp)
+
+            # En lugar de actualizar un saldo, se crea un ítem por pagar.
+            if net_ves > 0:
+                _create_payable_item_for_employee(
+                    db=db,
+                    employee_id=emp.id,
+                    source_type=models.PayableItemSourceType.PAYROLL_RUN,
+                    source_id=payroll_run_id,
+                    description=f"Nómina: {db_payroll_run.name}",
+                    amount=net_ves,
+                    currency=models.Currency.VES, # El neto siempre está en VES
+                    issue_date=db_payroll_run.period_end_date,
+                    due_date=db_payroll_run.period_end_date 
+                )
+            # Ya no se actualiza el campo `current_balance_ves` directamente.
+
+            if hours_processed and hours_processed > 0:
+                db.query(models.AttendanceRecord).filter(
+                    models.AttendanceRecord.employee_id == emp.id,
+                    models.AttendanceRecord.work_date >= db_payroll_run.period_start_date,
+                    models.AttendanceRecord.work_date <= db_payroll_run.period_end_date,
+                    models.AttendanceRecord.payroll_run_id.is_(None)
+                ).update({"payroll_run_id": payroll_run_id}, synchronize_session=False)
 
         except BusinessLogicError as e_ble_calc:
-            # Si el cálculo falla para un empleado (ej. falta tasa y es necesaria), se registra en notas y se continúa
             db_payroll_run.processing_notes = (db_payroll_run.processing_notes or "") + f"\nError procesando empleado {emp.full_name} (ID: {emp.id}): {e_ble_calc.detail}"
-            continue # Saltar al siguiente empleado
-
-
+            continue
+    
     db_payroll_run.status = models.PayrollRunStatus.CONFIRMED
     db_payroll_run.processed_by_user_id = confirming_user_id
-    db_payroll_run.processed_at = datetime.utcnow() # Usar UTC para fechas de servidor
+    db_payroll_run.processed_at = datetime.utcnow()
     db.add(db_payroll_run)
     
     try:
@@ -4797,7 +4998,6 @@ def process_and_confirm_payroll_run(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error al confirmar la nómina: {str(e_commit)}")
         
     db.refresh(db_payroll_run)
-    # Recargar con todos los detalles para la respuesta
     return get_payroll_run(db, payroll_run_id)
 
 
@@ -4841,32 +5041,230 @@ def delete_payroll_run_draft(db: Session, payroll_run_id: int) -> Optional[model
     return db_payroll_run # El objeto estará marcado como eliminado en la sesión
 
 
+def _calculate_integral_salary_for_employee(db: Session, employee: models.Employee, on_date: date) -> float:
+    """
+    Calcula el Salario Integral Diario para un empleado en una fecha específica,
+    usando el Salario Normal (base + componentes fijos) como punto de partida.
+    """
+    if not employee.pay_frequency or not employee.base_salary_currency:
+        return 0.0
+
+    # --- PASO 1: Calcular el Salario Base Mensual en VES ---
+    base_salary_monthly_ves = 0.0
+    exchange_rate_value = None
+    
+    # Obtener la tasa de cambio si es necesaria
+    if employee.base_salary_currency == models.Currency.USD:
+        rate_model = get_latest_exchange_rate(db, from_currency=models.Currency.USD, on_date=on_date)
+        if not rate_model or not rate_model.rate:
+            return 0.0 # No se puede calcular sin tasa
+        exchange_rate_value = rate_model.rate
+
+    # Calcular el salario base mensual estimado sin importar la frecuencia
+    if employee.pay_frequency == models.EmployeePayFrequency.MONTHLY:
+        base_salary_monthly_ves = employee.base_salary_amount or 0.0
+    elif employee.pay_frequency == models.EmployeePayFrequency.FORTNIGHTLY:
+        base_salary_monthly_ves = (employee.base_salary_amount or 0.0) * 2
+    elif employee.pay_frequency == models.EmployeePayFrequency.HOURLY:
+        if not employee.hourly_rate or employee.hourly_rate <= 0:
+            return 0.0
+        # Estimación estándar: (tarifa por hora * 40 horas/semana * 52 semanas) / 12 meses
+        base_salary_monthly_ves = (employee.hourly_rate * 40 * 52) / 12
+
+    # Convertir el salario base a VES si está en USD
+    if employee.base_salary_currency == models.Currency.USD and exchange_rate_value:
+        base_salary_monthly_ves *= exchange_rate_value
+
+    # --- PASO 2: Sumar los Componentes Salariales para obtener el Salario Normal ---
+    salario_normal_monthly = base_salary_monthly_ves
+    
+    active_earning_components = get_salary_components_for_employee(db, employee.id, is_active=True)
+    
+    for comp in active_earning_components:
+        # Solo sumar componentes que son ASIGNACIONES (earnings)
+        if comp.component_definition.component_type == models.SalaryComponentType.EARNING:
+            # Reutilizamos la función que ya calcula el valor de cada componente en VES
+            component_amount_ves = _calculate_component_amount_in_ves(
+                assigned_comp=comp,
+                base_salary_monthly_ves=base_salary_monthly_ves, # Se le pasa el base para cálculos de %
+                exchange_rate_usd_ves=exchange_rate_value
+            )
+            if component_amount_ves:
+                salario_normal_monthly += component_amount_ves
+
+    if salario_normal_monthly <= 0:
+        return 0.0
+
+    # --- PASO 3: Calcular el Salario Integral a partir del Salario Normal ---
+    salary_normal_daily = salario_normal_monthly / 30
+
+    # Alícuota de Utilidades (Aguinaldos)
+    days_of_utilities = 30 
+    aliquot_utilities = (salary_normal_daily * days_of_utilities) / 360
+
+    # Alícuota de Bono Vacacional
+    years_of_service = relativedelta(on_date, employee.hire_date).years
+    days_vacation_bonus = min(30, 15 + years_of_service)
+    aliquot_vacation_bonus = (salary_normal_daily * days_vacation_bonus) / 360
+    
+    integral_salary_daily = salary_normal_daily + aliquot_utilities + aliquot_vacation_bonus
+    
+    return round(integral_salary_daily, 2)
+
+
+def _create_payable_item_for_employee(
+    db: Session,
+    employee_id: int,
+    source_type: models.PayableItemSourceType,
+    source_id: int,
+    description: str,
+    amount: float,
+    currency: models.Currency,
+    issue_date: date,
+    due_date: Optional[date] = None
+) -> models.EmployeePayableItem:
+    """
+    Crea un nuevo ítem por pagar para un empleado, manejando la conversión de moneda.
+    """
+    if not due_date:
+        due_date = issue_date
+
+    amount_ves = amount
+    if currency != models.Currency.VES:
+        converted_amount, _ = _calculate_converted_amount_ves(
+            db=db,
+            original_amount=amount,
+            original_currency=currency,
+            rate_date=issue_date
+        )
+        amount_ves = converted_amount
+
+    db_payable_item = models.EmployeePayableItem(
+        employee_id=employee_id,
+        source_type=source_type,
+        source_id=source_id,
+        description=description,
+        issue_date=issue_date,
+        due_date=due_date,
+        amount_original=amount,
+        currency_original=currency,
+        amount_ves_at_creation=amount_ves,
+        status=models.PayableItemStatus.PENDING
+    )
+    db.add(db_payable_item)
+    db.flush() # Para asegurar que el objeto tiene un ID por si se necesita después
+    return db_payable_item
+
+
+def run_update_social_benefits_process(db: Session) -> Dict[str, Any]:
+    """
+    Proceso para actualizar los abonos de prestaciones de todos los empleados activos.
+    Debe correrse al menos una vez por trimestre.
+    """
+    active_employees = db.query(models.Employee).filter(models.Employee.is_active == True).all()
+    today = date.today()
+    updated_count = 0
+    errors = []
+
+    for emp in active_employees:
+        try:
+            # Lógica para determinar si corresponde un nuevo abono trimestral
+            last_calc = emp.last_benefit_calculation_date
+            if not last_calc:
+                # Si nunca se ha calculado, establecer la fecha de ingreso como base
+                last_calc = emp.hire_date
+            
+            # Avanzar 3 meses desde el último cálculo
+            next_due_date = last_calc + relativedelta(months=3)
+
+            if today >= next_due_date:
+                # Calcular abono trimestral
+                integral_salary_today = _calculate_integral_salary_for_employee(db, emp, today)
+                quarterly_deposit = integral_salary_today * 15
+                emp.guaranteed_benefits_ves += quarterly_deposit
+                
+                # Calcular días adicionales si cumple aniversario
+                if emp.hire_date.month == today.month and emp.hire_date.day == today.day and today > emp.hire_date:
+                    years = relativedelta(today, emp.hire_date).years
+                    if years >= 1:
+                        # La ley indica usar el promedio del salario integral del año
+                        # Por simplicidad aquí usamos el actual, pero lo ideal es un cálculo más complejo.
+                        additional_days_amount = integral_salary_today * 2 
+                        emp.guaranteed_benefits_ves += additional_days_amount
+
+                emp.last_benefit_calculation_date = today
+                db.add(emp)
+                updated_count += 1
+        except Exception as e:
+            errors.append(f"Error procesando empleado ID {emp.id}: {str(e)}")
+
+    db.commit()
+    return {"message": "Proceso completado.", "employees_updated": updated_count, "errors": errors}
+
+# --- NUEVA FUNCIÓN PARA LIQUIDACIÓN ---
+
+
+def generate_severance_calculation(db: Session, employee_id: int) -> Dict[str, Any]:
+    """Genera el cálculo de liquidación para un empleado que termina su relación laboral."""
+    emp = get_employee(db, employee_id)
+    if not emp:
+        raise HTTPException(status_code=404, detail="Empleado no encontrado")
+        
+    termination_date = emp.termination_date or date.today()
+    
+    # 1. Calcular Monto por Garantía Acumulada
+    total_guaranteed = emp.guaranteed_benefits_ves
+
+    # 2. Calcular Monto Retroactivo (Art. 142.c)
+    rd = relativedelta(termination_date, emp.hire_date)
+    years_for_calc = rd.years
+    if rd.months > 6:
+        years_for_calc += 1
+    
+    last_integral_salary = _calculate_integral_salary_for_employee(db, emp, termination_date)
+    retroactive_amount = last_integral_salary * 30 * years_for_calc
+    
+    # 3. Comparar y determinar el monto a pagar
+    final_amount_to_pay = max(total_guaranteed, retroactive_amount)
+
+    return {
+        "employee_info": {
+            "full_name": emp.full_name,
+            "identity_document": emp.identity_document,
+            "hire_date": emp.hire_date,
+            "termination_date": termination_date
+        },
+        "calculation_details": {
+            "total_guaranteed_benefits": round(total_guaranteed, 2),
+            "retroactive_calculation_amount": round(retroactive_amount, 2),
+            "final_amount_to_pay_lottt": round(final_amount_to_pay, 2)
+        },
+        "principle_of_favor_applied": "retroactive" if retroactive_amount > total_guaranteed else "guaranteed_accumulation"
+    }
+
+
 # --- CRUD for EmployeeBalanceAdjustment ---
 
 def create_employee_balance_adjustment(db: Session, adjustment_in: schemas.EmployeeBalanceAdjustmentCreate, created_by_user_id: int) -> models.EmployeeBalanceAdjustment:
+    """
+    Crea un registro de ajuste de saldo.
+    - Si el tipo es 'earning' (asignación), crea un nuevo 'EmployeePayableItem' positivo.
+    - Si el tipo es 'deduction' (deducción), aplica el monto a un 'EmployeePayableItem' existente,
+      reduciendo su saldo pendiente al aumentar su monto pagado.
+    """
     db_employee = get_employee(db, adjustment_in.employee_id)
     if not db_employee:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Empleado con ID {adjustment_in.employee_id} no encontrado.")
 
-    amount_ves_calculated = 0.0
-    rate_applied = None
+    # Calcular el valor del ajuste en VES, independientemente del tipo
+    amount_ves_calculated, rate_applied = _calculate_converted_amount_ves(
+        db,
+        original_amount=adjustment_in.amount,
+        original_currency=adjustment_in.currency,
+        rate_date=adjustment_in.adjustment_date
+    )
 
-    if adjustment_in.currency == models.Currency.VES:
-        amount_ves_calculated = adjustment_in.amount
-    elif adjustment_in.currency == models.Currency.USD:
-        # Usar _calculate_converted_amount_ves que ya maneja la búsqueda de tasa y error
-        try:
-            amount_ves_calculated, rate_applied = _calculate_converted_amount_ves(
-                db, 
-                original_amount=adjustment_in.amount, 
-                original_currency=models.Currency.USD, 
-                rate_date=adjustment_in.adjustment_date
-            )
-        except HTTPException as e_rate: # Si _calculate_converted_amount_ves lanza error (ej. sin tasa)
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Error al convertir monto del ajuste: {e_rate.detail}")
-    else: # Otras monedas no soportadas para ajuste directo por ahora
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Moneda '{adjustment_in.currency.value}' no soportada para ajustes directos de saldo.")
-
+    # Crear el registro de ajuste (para auditoría) en ambos casos
     db_adjustment = models.EmployeeBalanceAdjustment(
         employee_id=adjustment_in.employee_id,
         adjustment_date=adjustment_in.adjustment_date,
@@ -4876,21 +5274,61 @@ def create_employee_balance_adjustment(db: Session, adjustment_in: schemas.Emplo
         currency=adjustment_in.currency,
         exchange_rate_usd_ves=rate_applied,
         amount_ves=amount_ves_calculated,
-        created_by_user_id=created_by_user_id
+        created_by_user_id=created_by_user_id,
+        # Guardar el vínculo en la base de datos
+        target_payable_item_id=adjustment_in.target_payable_item_id if adjustment_in.adjustment_type == models.EmployeeBalanceAdjustmentType.DEDUCTION else None
     )
     db.add(db_adjustment)
 
-    # Actualizar saldo del empleado
+    # --- Lógica Diferenciada según el tipo de ajuste ---
     if adjustment_in.adjustment_type == models.EmployeeBalanceAdjustmentType.EARNING:
-        db_employee.current_balance_ves = (db_employee.current_balance_ves or 0.0) + amount_ves_calculated
+        # Lógica original: Crear un nuevo item por pagar positivo
+        db.flush()  # Para obtener el ID del ajuste y usarlo como source_id
+        _create_payable_item_for_employee(
+            db=db,
+            employee_id=adjustment_in.employee_id,
+            source_type=models.PayableItemSourceType.ADJUSTMENT,
+            source_id=db_adjustment.id,
+            description=adjustment_in.description,
+            amount=adjustment_in.amount,
+            currency=adjustment_in.currency,
+            issue_date=adjustment_in.adjustment_date
+        )
     elif adjustment_in.adjustment_type == models.EmployeeBalanceAdjustmentType.DEDUCTION:
-        db_employee.current_balance_ves = (db_employee.current_balance_ves or 0.0) - amount_ves_calculated
-    db.add(db_employee)
-    
-    db.commit()
-    db.refresh(db_adjustment)
-    db.refresh(db_employee) # Asegurar que el empleado también está refrescado
-    return db_adjustment
+        # Nueva Lógica: Modificar un item por pagar existente
+        target_item_id = adjustment_in.target_payable_item_id
+        target_item = db.query(models.EmployeePayableItem).filter(
+            models.EmployeePayableItem.id == target_item_id,
+            models.EmployeePayableItem.employee_id == adjustment_in.employee_id
+        ).first()
+
+        if not target_item:
+            raise BusinessLogicError(f"El ítem por pagar objetivo (ID: {target_item_id}) no se encontró o no pertenece al empleado.")
+
+        pending_debt_ves = round(target_item.amount_ves_at_creation - target_item.amount_paid_ves, 2)
+        if amount_ves_calculated > pending_debt_ves + 0.01: # Margen para flotantes
+            raise BusinessLogicError(f"La deducción ({amount_ves_calculated} VES) no puede ser mayor que el saldo pendiente del ítem seleccionado ({pending_debt_ves} VES).")
+
+        # Aplicar la deducción aumentando el monto pagado del ítem objetivo
+        target_item.amount_paid_ves += amount_ves_calculated
+        
+        # Actualizar el estado del ítem objetivo
+        if round(target_item.amount_paid_ves, 2) >= round(target_item.amount_ves_at_creation, 2) - 0.01:
+            target_item.status = PayableItemStatus.PAID
+        else:
+            target_item.status = PayableItemStatus.PARTIALLY_PAID
+        
+        db.add(target_item)
+
+    # Commit final de la transacción
+    try:
+        db.commit()
+        db.refresh(db_adjustment)
+        return db_adjustment
+    except Exception as e:
+        db.rollback()
+        # Considera registrar el error 'e' en un log
+        raise HTTPException(status_code=500, detail=f"Error al procesar el ajuste de saldo: {str(e)}")
 
 
 def get_employee_balance_adjustment(db: Session, adjustment_id: int) -> Optional[models.EmployeeBalanceAdjustment]:
@@ -4914,104 +5352,165 @@ def get_balance_adjustments_for_employee(
     return {"items": items, "total": total, "page": current_page, "pages": pages, "limit": limit}
 
 
+def get_employee_payable_items(db: Session, employee_id: int) -> List[models.EmployeePayableItem]:
+    """
+    Obtiene todos los ítems pendientes o parcialmente pagados para un empleado.
+    """
+    return db.query(models.EmployeePayableItem).filter(
+        models.EmployeePayableItem.employee_id == employee_id,
+        models.EmployeePayableItem.status.in_([
+            models.PayableItemStatus.PENDING,
+            models.PayableItemStatus.PARTIALLY_PAID
+        ])
+    ).order_by(models.EmployeePayableItem.due_date.asc()).all()
+    
+
+def get_employee_pending_balance_ves(db: Session, employee_id: int) -> float:
+    """
+    Calcula el saldo pendiente total de un empleado sumando todos sus items por pagar pendientes.
+    Un saldo positivo significa que la escuela debe al empleado.
+    Un saldo negativo (de una deducción) significa que el empleado debe a la escuela.
+    """
+    total_pending = db.query(
+        sql_func.sum(models.EmployeePayableItem.amount_ves_at_creation - models.EmployeePayableItem.amount_paid_ves)
+    ).filter(
+        models.EmployeePayableItem.employee_id == employee_id,
+        models.EmployeePayableItem.status.in_([
+            models.PayableItemStatus.PENDING,
+            models.PayableItemStatus.PARTIALLY_PAID
+        ])
+    ).scalar()
+
+    return round(total_pending or 0.0, 2)
+
+
 # --- CRUD for EmployeePayment ---
+
+# backend/app/crud.py
 
 def create_employee_payment(
     db: Session,
     payment_in: schemas.EmployeePaymentCreate,
     created_by_user_id: int,
     default_expense_category_name: str = "Sueldos y Salarios del Personal",
-    internal_supplier_name: str = "Pagos Internos al Personal" # Nombre para el proveedor interno
+    internal_supplier_name: str = "Pagos Internos al Personal"
 ) -> models.EmployeePayment:
     db_employee = get_employee(db, payment_in.employee_id)
     if not db_employee:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Empleado con ID {payment_in.employee_id} no encontrado.")
 
-    # Crear el objeto de pago al empleado
-    db_employee_payment = models.EmployeePayment(
+    # 1. Calcular el valor del pago en VES
+    amount_paid_ves_equivalent, rate_applied = _calculate_converted_amount_ves(
+        db, payment_in.amount_paid, payment_in.currency_paid, payment_in.payment_date
+    )
+
+    # 2. Validar las asignaciones
+    total_allocated_ves = 0
+    if payment_in.allocations_details:
+        for alloc in payment_in.allocations_details:
+            total_allocated_ves += alloc.amount_to_allocate_ves
+    
+    if round(total_allocated_ves, 2) > round(amount_paid_ves_equivalent, 2) + 0.01:
+        raise BusinessLogicError(f"El total asignado ({total_allocated_ves} VES) no puede exceder el monto del pago ({amount_paid_ves_equivalent} VES).")
+
+    # 3. Crear el registro del pago principal
+    db_payment = models.EmployeePayment(
         employee_id=payment_in.employee_id,
         payment_date=payment_in.payment_date,
-        amount_paid_ves=payment_in.amount_paid_ves,
+        amount_paid_original=payment_in.amount_paid,
+        currency_paid_original=payment_in.currency_paid,
+        exchange_rate_applied=rate_applied,
+        amount_paid_ves_equivalent=amount_paid_ves_equivalent,
         payment_method=payment_in.payment_method,
         reference_number=payment_in.reference_number,
         notes=payment_in.notes,
         created_by_user_id=created_by_user_id
     )
-    db.add(db_employee_payment)
+    db.add(db_payment)
+    db.flush()
 
-    # Actualizar el saldo del empleado
-    db_employee.current_balance_ves = (db_employee.current_balance_ves or 0.0) - payment_in.amount_paid_ves
-    db.add(db_employee)
+    # 4. Procesar cada asignación
+    if payment_in.allocations_details:
+        for alloc_detail in payment_in.allocations_details:
+            payable_item = db.query(models.EmployeePayableItem).filter(models.EmployeePayableItem.id == alloc_detail.payable_item_id).first()
+            
+            if not payable_item or payable_item.employee_id != payment_in.employee_id:
+                raise BusinessLogicError(f"Ítem por pagar ID {alloc_detail.payable_item_id} no es válido o no pertenece al empleado.")
+            if payable_item.status == models.PayableItemStatus.PAID:
+                raise BusinessLogicError(f"Ítem por pagar ID {payable_item.id} ('{payable_item.description}') ya ha sido pagado completamente.")
 
-    # 1. Buscar o crear la categoría de gasto para sueldos
+            pending_debt_ves = round(payable_item.amount_ves_at_creation - payable_item.amount_paid_ves, 2)
+            if alloc_detail.amount_to_allocate_ves > pending_debt_ves + 0.01:
+                raise BusinessLogicError(f"El monto a asignar para '{payable_item.description}' excede su deuda pendiente.")
+            
+            db_allocation = models.EmployeePaymentAllocation(
+                employee_payment_id=db_payment.id,
+                employee_payable_item_id=payable_item.id,
+                amount_allocated_ves=alloc_detail.amount_to_allocate_ves
+            )
+            db.add(db_allocation)
+            
+            payable_item.amount_paid_ves += alloc_detail.amount_to_allocate_ves
+            if round(payable_item.amount_paid_ves, 2) >= round(payable_item.amount_ves_at_creation, 2) - 0.01:
+                payable_item.status = models.PayableItemStatus.PAID
+            else:
+                payable_item.status = models.PayableItemStatus.PARTIALLY_PAID
+            db.add(payable_item)
+
+    # 5. Crear el registro del gasto asociado
     expense_category = get_expense_category_by_name(db, name=default_expense_category_name)
     if not expense_category:
-        category_to_create = schemas.ExpenseCategoryCreate(name=default_expense_category_name, description="Gastos relacionados con la nómina y pagos al personal.")
-        expense_category = create_expense_category(db, category_in=category_to_create)
-
-    # 2. Buscar o crear el proveedor interno y asociarlo a la categoría de sueldos
+        expense_category = create_expense_category(db, category_in=schemas.ExpenseCategoryCreate(name=default_expense_category_name, description="Gastos de nómina y personal."))
+    
     internal_supplier = get_supplier_by_name(db, name=internal_supplier_name)
     if not internal_supplier:
-        supplier_to_create = schemas.SupplierCreate(
-            name=internal_supplier_name,
-            category_id=expense_category.id,
-            rif_ci=None, # Es un proveedor interno, no necesita RIF
-            is_active=True
-        )
-        internal_supplier = create_supplier(db, supplier_in=supplier_to_create)
+        internal_supplier = create_supplier(db, supplier_in=schemas.SupplierCreate(name=internal_supplier_name, category_id=expense_category.id, is_active=True))
 
-    # 3. Crear el payload del gasto usando el ID del proveedor interno
-    expense_description = f"Pago de nómina/salario a {db_employee.full_name} ({db_employee.identity_document or 'ID N/A'}). Fecha Pago: {payment_in.payment_date.strftime('%d/%m/%Y')}."
-    if payment_in.reference_number:
-        expense_description += f" Ref: {payment_in.reference_number}."
-
-    # CAMBIO CLAVE: Usamos el ID del proveedor interno y ya no pasamos category_id
-    expense_data_in = schemas.ExpenseCreate(
-        expense_date=payment_in.payment_date,
-        description=expense_description,
-        supplier_id=internal_supplier.id, # <-- CORRECCIÓN
-        amount=payment_in.amount_paid_ves,
-        currency=models.Currency.VES,
-        notes=f"Pago automático generado desde módulo de personal. ID de Pago a Empleado: {db_employee_payment.id}"
-    )
-
-    # 4. Crear el registro de gasto
-    new_expense_record = create_expense(db=db, expense_in=expense_data_in, user_id=created_by_user_id)
+    expense_description = f"Pago de nómina/saldo a {db_employee.full_name} (Pago ID: {db_payment.id})"
     
-    # 5. Lógica para crear el recibo de pago (payslip) y registrar el pago del gasto
+    new_expense_record = create_expense(
+        db=db, 
+        expense_in=schemas.ExpenseCreate(
+            expense_date=payment_in.payment_date,
+            description=expense_description,
+            supplier_id=internal_supplier.id,
+            amount=amount_paid_ves_equivalent,
+            currency=models.Currency.VES,
+            notes=f"Generado automáticamente desde el pago a empleado ID {db_payment.id}."
+        ),
+        user_id=created_by_user_id
+    )
+    
+    # Marcar el gasto como pagado inmediatamente
+    if new_expense_record and new_expense_record.id:
+        create_expense_payment(db=db, payment_in=schemas.ExpensePaymentCreate(
+            expense_id=new_expense_record.id,
+            payment_date=payment_in.payment_date,
+            amount_paid=amount_paid_ves_equivalent,
+            currency_paid=models.Currency.VES,
+            payment_method_used=payment_in.payment_method,
+            reference_number=payment_in.reference_number
+        ), user_id=created_by_user_id)
+
+    # --- INICIO DE CORRECCIÓN ---
+    # 6. Generar el Recibo de Pago (Payslip) asociado al pago
     school_config = get_school_configuration(db)
     if not school_config:
         db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="La configuración de la escuela no está establecida, no se puede generar el recibo de pago."
-        )
+        raise BusinessLogicError("No se ha configurado la información de la escuela, no se puede generar el recibo de pago.")
     
-    db.flush() # Para asegurar que db_employee_payment tiene un ID
-    create_payslip(db, employee_payment=db_employee_payment, school_config=school_config)
+    # Crear el recibo de pago
+    create_payslip(db=db, employee_payment=db_payment, school_config=school_config)
+    # --- FIN DE CORRECCIÓN ---
 
-    # Marcar el gasto recién creado como pagado
-    if new_expense_record and new_expense_record.id:
-        expense_payment_for_expense_record = schemas.ExpensePaymentCreate(
-            expense_id=new_expense_record.id,
-            payment_date=payment_in.payment_date,
-            amount_paid=new_expense_record.amount,
-            currency_paid=models.Currency.VES,
-            payment_method_used=payment_in.payment_method if payment_in.payment_method else "Pago de Nómina",
-            reference_number=payment_in.reference_number
-        )
-        # Esta llamada marcará el gasto como 'paid' internamente
-        create_expense_payment(db=db, payment_in=expense_payment_for_expense_record, user_id=created_by_user_id)
-    
+    # Commit final y devolución del objeto
     try:
         db.commit()
+        db.refresh(db_payment)
+        return db_payment
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error final al guardar pago y gasto asociado: {str(e)}")
-
-    db.refresh(db_employee_payment)
-    db.refresh(db_employee)
-    return db_employee_payment
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error final al guardar el pago: {str(e)}")
 
 
 def get_employee_payment(db: Session, payment_id: int) -> Optional[models.EmployeePayment]:
@@ -5035,6 +5534,14 @@ def get_payments_for_employee(
     return {"items": items, "total": total, "page": current_page, "pages": pages, "limit": limit}
 
 
+def get_salary_history_for_employee(db: Session, employee_id: int) -> List[models.SalaryHistory]:
+    """Obtiene el historial salarial de un empleado, ordenado por fecha de efectividad descendente."""
+    return db.query(models.SalaryHistory)\
+        .filter(models.SalaryHistory.employee_id == employee_id)\
+        .order_by(models.SalaryHistory.effective_date.desc())\
+        .all()
+
+
 # Lógica para recibos de pago a empleados
 
 
@@ -5044,33 +5551,70 @@ def create_payslip(
     school_config: models.SchoolConfiguration
 ) -> models.Payslip:
     """
-    Crea un recibo de pago (Payslip) buscando el desglose en la corrida de nómina más reciente.
+    Crea un recibo de pago (Payslip).
+    Si el pago corresponde a una nómina, busca el desglose detallado.
+    Si no, construye el desglose a partir de las asignaciones del pago.
     """
     employee = employee_payment.employee
     
-    # --- Lógica Clave: Buscar el desglose en la última corrida de nómina confirmada ---
-    latest_payroll_detail = db.query(models.PayrollRunEmployeeDetail)\
-        .filter(models.PayrollRunEmployeeDetail.employee_id == employee.id)\
-        .order_by(models.PayrollRunEmployeeDetail.payroll_run_id.desc())\
-        .first()
-
-    total_earnings = employee_payment.amount_paid_ves
+    # Variables a poblar
+    total_earnings = 0.0
     total_deductions = 0.0
-    payment_breakdown_str = json.dumps([{
-        "name": "Pago de Saldo/Adelanto",
-        "type": "earning",
-        "amount_ves": employee_payment.amount_paid_ves
-    }])
-    period_start = None
-    period_end = None
+    payment_breakdown_str = "[]"
+    period_start = employee_payment.payment_date
+    period_end = employee_payment.payment_date
 
-    if latest_payroll_detail:
-        # Si encontramos un detalle de nómina, usamos su desglose
-        total_earnings = latest_payroll_detail.total_earnings_ves
-        total_deductions = latest_payroll_detail.total_deductions_ves
-        payment_breakdown_str = latest_payroll_detail.applied_components_details_json
-        period_start = latest_payroll_detail.payroll_run.period_start_date
-        period_end = latest_payroll_detail.payroll_run.period_end_date
+    # Verificamos si este pago corresponde a un único item generado por una nómina.
+    is_payroll_payment = (
+        len(employee_payment.allocations) == 1 and
+        employee_payment.allocations[0].payable_item.source_type == models.PayableItemSourceType.PAYROLL_RUN
+    )
+
+    if is_payroll_payment:
+        # Si es un pago de nómina, buscamos el desglose original detallado.
+        payable_item = employee_payment.allocations[0].payable_item
+        payroll_run_detail = db.query(models.PayrollRunEmployeeDetail).filter(
+            models.PayrollRunEmployeeDetail.payroll_run_id == payable_item.source_id,
+            models.PayrollRunEmployeeDetail.employee_id == employee.id
+        ).first()
+
+        if payroll_run_detail:
+            # Usamos los datos precisos del cálculo de la nómina original.
+            total_earnings = payroll_run_detail.total_earnings_ves
+            total_deductions = payroll_run_detail.total_deductions_ves
+            payment_breakdown_str = payroll_run_detail.applied_components_details_json
+            period_start = payroll_run_detail.payroll_run.period_start_date
+            period_end = payroll_run_detail.payroll_run.period_end_date
+    
+    # Si NO es un pago de nómina (ej. pago de un ajuste manual), se construye el desglose a partir de las asignaciones.
+    if not is_payroll_payment:
+        payment_breakdown_list = []
+        for allocation in employee_payment.allocations:
+            payable_item = allocation.payable_item
+            if not payable_item: continue
+
+            component_type = "deduction" if payable_item.amount_ves_at_creation < 0 else "earning"
+
+            if component_type == 'earning':
+                total_earnings += allocation.amount_allocated_ves
+            else:
+                total_deductions += allocation.amount_allocated_ves
+            
+            payment_breakdown_list.append({
+                "name": payable_item.description,
+                "type": component_type,
+                "amount_ves": abs(allocation.amount_allocated_ves)
+            })
+        
+        # Si no hay asignaciones (pago libre), se crea un desglose genérico.
+        if not payment_breakdown_list:
+            payment_breakdown_list.append({
+                "name": employee_payment.notes or "Pago de Saldo General", "type": "earning",
+                "amount_ves": employee_payment.amount_paid_ves_equivalent
+            })
+            total_earnings = employee_payment.amount_paid_ves_equivalent
+        
+        payment_breakdown_str = json.dumps(payment_breakdown_list)
 
     db_payslip = models.Payslip(
         employee_payment_id=employee_payment.id,
@@ -5084,9 +5628,9 @@ def create_payslip(
         payment_date_snapshot=employee_payment.payment_date,
         period_start_date=period_start,
         period_end_date=period_end,
-        total_earnings_ves=total_earnings,
-        total_deductions_ves=total_deductions,
-        net_pay_ves=employee_payment.amount_paid_ves, # El neto pagado es el del pago actual
+        total_earnings_ves=round(total_earnings, 2),
+        total_deductions_ves=round(total_deductions, 2),
+        net_pay_ves=employee_payment.amount_paid_ves_equivalent,
         payment_breakdown_json=payment_breakdown_str
     )
     
@@ -5108,14 +5652,14 @@ def get_payslips(
     search: Optional[str] = None,
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
-    position_id: Optional[int] = None, # <--- NUEVO PARÁMETRO
+    position_id: Optional[int] = None, 
 ) -> Dict[str, Any]:
     """Obtiene una lista paginada de recibos de pago con filtros."""
     
     query = db.query(models.Payslip)
 
     if position_id is not None:
-        # Hacemos un JOIN con la tabla Employee para poder filtrar por position_id
+        # Hace un JOIN con la tabla Employee para poder filtrar por position_id
         query = query.join(models.Employee, models.Payslip.employee_id == models.Employee.id)\
                      .filter(models.Employee.position_id == position_id)
 
@@ -5298,3 +5842,206 @@ def get_dashboard_data(db: Session, end_date: date = None) -> schemas.DashboardD
         recent_payments=[schemas.PaymentResponse.from_orm(p) for p in recent_payments],
         recent_invoices=[schemas.InvoiceResponse.from_orm(i) for i in recent_invoices]
     )
+    
+    
+# ---  FUNCIONES CRUD para AttendanceRecord ---
+
+def create_attendance_record(db: Session, record_in: schemas.AttendanceRecordCreate, user_id: int) -> models.AttendanceRecord:
+    db_record = models.AttendanceRecord(**record_in.model_dump(), created_by_user_id=user_id)
+    db.add(db_record)
+    db.commit()
+    db.refresh(db_record)
+    return db_record
+
+def get_unprocessed_hours_for_employee_in_period(db: Session, employee_id: int, start_date: date, end_date: date) -> float:
+    """Suma todas las horas no procesadas de un empleado en un rango de fechas."""
+    total_hours = db.query(sql_func.sum(models.AttendanceRecord.hours_worked))\
+        .filter(
+            models.AttendanceRecord.employee_id == employee_id,
+            models.AttendanceRecord.work_date >= start_date,
+            models.AttendanceRecord.work_date <= end_date,
+            models.AttendanceRecord.payroll_run_id.is_(None) # Clave: solo horas no procesadas
+        ).scalar()
+    return total_hours or 0.0
+
+
+# --- CRUD PARA AUSENCIAS --- 
+
+
+def get_unpaid_leave_days_in_period(db: Session, employee_id: int, start_date: date, end_date: date) -> int:
+    """Calcula el número de días de ausencia NO remunerada en un período."""
+    unpaid_leaves = db.query(models.LeaveRequest)\
+        .join(models.LeaveType)\
+        .filter(
+            models.LeaveRequest.employee_id == employee_id,
+            models.LeaveRequest.status == models.LeaveRequestStatus.APPROVED,
+            models.LeaveType.is_paid == False,
+            models.LeaveRequest.payroll_run_id.is_(None) # Clave: solo ausencias no procesadas
+        ).all()
+    
+    total_unpaid_days = 0
+    for leave in unpaid_leaves:
+        # Calcular días de la ausencia que caen dentro del período de la nómina
+        overlap_start = max(leave.start_date, start_date)
+        overlap_end = min(leave.end_date, end_date)
+        
+        if overlap_start <= overlap_end:
+            # timedelta.days + 1 para incluir ambos días
+            total_unpaid_days += (overlap_end - overlap_start).days + 1
+            
+    return total_unpaid_days
+
+
+def create_leave_type(db: Session, leave_type_in: schemas.LeaveTypeCreate) -> models.LeaveType:
+    db_leave_type = models.LeaveType(**leave_type_in.model_dump())
+    db.add(db_leave_type)
+    db.commit()
+    db.refresh(db_leave_type)
+    return db_leave_type
+
+def get_leave_types(db: Session) -> List[models.LeaveType]:
+    return db.query(models.LeaveType).order_by(models.LeaveType.name).all()
+
+def update_leave_type(db: Session, leave_type_id: int, leave_type_in: schemas.LeaveTypeUpdate) -> Optional[models.LeaveType]:
+    db_leave_type = db.get(models.LeaveType, leave_type_id)
+    if db_leave_type:
+        update_data = leave_type_in.model_dump(exclude_unset=True)
+        for key, value in update_data.items():
+            setattr(db_leave_type, key, value)
+        db.add(db_leave_type)
+        db.commit()
+        db.refresh(db_leave_type)
+    return db_leave_type
+
+def delete_leave_type(db: Session, leave_type_id: int) -> Optional[models.LeaveType]:
+    db_leave_type = db.get(models.LeaveType, leave_type_id)
+    if db_leave_type:
+        if db_leave_type.leave_requests:
+            raise BusinessLogicError("No se puede eliminar el tipo de ausencia porque está en uso por una o más solicitudes.")
+        db.delete(db_leave_type)
+        db.commit()
+    return db_leave_type
+
+
+def create_leave_request(db: Session, request_in: schemas.LeaveRequestCreate, requested_by_user_id: int) -> models.LeaveRequest:
+    # Validaciones
+    if not db.get(models.Employee, request_in.employee_id):
+        raise BusinessLogicError("El empleado especificado no existe.")
+    if not db.get(models.LeaveType, request_in.leave_type_id):
+        raise BusinessLogicError("El tipo de ausencia especificado no existe.")
+    if request_in.start_date > request_in.end_date:
+        raise BusinessLogicError("La fecha de inicio no puede ser posterior a la fecha de fin.")
+
+    db_request = models.LeaveRequest(
+        **request_in.model_dump(),
+        requested_by_user_id=requested_by_user_id
+    )
+    db.add(db_request)
+    db.commit()
+    db.refresh(db_request)
+    return db_request
+
+
+def update_leave_request_status(db: Session, request_id: int, new_status: models.LeaveRequestStatus, processed_by_user_id: int) -> Optional[models.LeaveRequest]:
+    db_request = db.get(models.LeaveRequest, request_id)
+    if not db_request:
+        return None
+    
+    if db_request.status != models.LeaveRequestStatus.PENDING:
+        raise BusinessLogicError(f"Solo se pueden procesar solicitudes con estado 'Pendiente'. Estado actual: {db_request.status.value}")
+
+    db_request.status = new_status
+    db_request.processed_by_user_id = processed_by_user_id
+    db.add(db_request)
+    db.commit()
+    db.refresh(db_request)
+    return db_request
+
+
+def update_leave_request(db: Session, request_id: int, request_in: schemas.LeaveRequestUpdate) -> Optional[models.LeaveRequest]:
+    db_request = db.get(models.LeaveRequest, request_id)
+    if not db_request:
+        return None
+    
+    # No se puede editar una solicitud que ya fue procesada en una nómina
+    if db_request.payroll_run_id:
+        raise BusinessLogicError("No se puede editar una ausencia que ya ha sido procesada en una nómina.")
+
+    update_data = request_in.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(db_request, key, value)
+        
+    db.add(db_request)
+    db.commit()
+    db.refresh(db_request)
+    return db_request
+
+
+#--- REPORTES PARA COSTO DE NÓMINAS ---
+
+
+def get_payroll_cost_report_for_run(db: Session, payroll_run_id: int) -> Optional[schemas.PayrollCostReportResponse]:
+    """
+    Calcula y devuelve un reporte de costos agregados para una corrida de nómina confirmada.
+    """
+    payroll_run = db.query(models.PayrollRun).options(
+        joinedload(models.PayrollRun.employee_details).joinedload(models.PayrollRunEmployeeDetail.employee)
+    ).filter(models.PayrollRun.id == payroll_run_id).first()
+
+    if not payroll_run:
+        return None
+
+    if payroll_run.status != models.PayrollRunStatus.CONFIRMED:
+        raise BusinessLogicError(detail=f"Solo se pueden generar reportes de costo para nóminas en estado 'Confirmada'. El estado actual es '{payroll_run.status.value}'.")
+
+    total_base = 0.0
+    total_earnings = 0.0
+    total_deductions = 0.0
+    total_net = 0.0
+    
+    details_for_response = []
+
+    for detail in payroll_run.employee_details:
+        total_base += detail.base_salary_amount_period_ves
+        total_earnings += detail.total_earnings_ves
+        total_deductions += detail.total_deductions_ves
+        total_net += detail.net_amount_to_pay_ves
+        
+        details_for_response.append(schemas.PayrollCostReportDetailSchema(
+            employee_id=detail.employee.id,
+            employee_full_name=detail.employee.full_name,
+            base_salary_ves=detail.base_salary_amount_period_ves,
+            total_earnings_ves=detail.total_earnings_ves,
+            total_deductions_ves=detail.total_deductions_ves,
+            net_pay_ves=detail.net_amount_to_pay_ves
+        ))
+
+    return schemas.PayrollCostReportResponse(
+        payroll_run_id=payroll_run.id,
+        payroll_run_name=payroll_run.name,
+        period_start_date=payroll_run.period_start_date,
+        period_end_date=payroll_run.period_end_date,
+        total_base_salary_ves=round(total_base, 2),
+        total_earnings_ves=round(total_earnings, 2),
+        total_deductions_ves=round(total_deductions, 2),
+        total_net_pay_ves=round(total_net, 2),
+        employee_count=len(payroll_run.employee_details),
+        details=details_for_response
+    )
+    
+def get_positive_payable_items_for_employee(db: Session, employee_id: int) -> List[models.EmployeePayableItem]:
+    """
+    Obtiene los ítems por pagar para un empleado que tienen un saldo pendiente positivo.
+    Estos son los candidatos a los que se les puede aplicar una deducción.
+    """
+    # Usa una subconsulta o expresión para calcular el balance pendiente en la misma consulta
+    pending_balance_expr = models.EmployeePayableItem.amount_ves_at_creation - models.EmployeePayableItem.amount_paid_ves
+    
+    return db.query(models.EmployeePayableItem).filter(
+        models.EmployeePayableItem.employee_id == employee_id,
+        models.EmployeePayableItem.status.in_([
+            models.PayableItemStatus.PENDING,
+            models.PayableItemStatus.PARTIALLY_PAID
+        ]),
+        pending_balance_expr > 0.01 # Un pequeño margen para evitar problemas con flotantes
+    ).order_by(models.EmployeePayableItem.due_date.asc()).all()

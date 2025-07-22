@@ -1,3 +1,5 @@
+// frontend/school-admin-react/src/App.jsx
+
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from './contexts/AuthContext';
 import LoginPage from './pages/LoginPage';
@@ -34,6 +36,9 @@ import PayrollRunsPage from './pages/PayrollRunsPage';
 import PayrollRunDetailsPage from './pages/PayrollRunDetailsPage';
 import PayslipsHistoryPage from './pages/PayslipsHistoryPage';
 import PayslipDetailPage from './pages/PayslipDetailPage';
+import TimeManagementPage from './pages/TimeManagementPage';
+import LeaveManagementPage from './pages/LeaveManagementPage';
+import PayrollCostReportPage from './pages/PayrollCostReportPage';
 import { ToastContainer } from 'react-toastify'; 
 import 'react-toastify/dist/ReactToastify.css';  
 
@@ -89,6 +94,9 @@ function App() {
                   <Route path="personnel/payroll-runs/:runId/details" element={<PayrollRunDetailsPage />} />
                   <Route path="personnel/payslips" element={<PayslipsHistoryPage />} />
                   <Route path="personnel/payslips/:payslipId" element={<PayslipDetailPage />} />
+                  <Route path="personnel/time-management" element={<TimeManagementPage />} />
+                  <Route path="personnel/leave-management" element={<LeaveManagementPage />} />
+                  <Route path="/personnel/payroll-runs/:runId/cost-report" element={<PayrollCostReportPage />} />
                   <Route path="settings" element={<SettingsPage />} />
                   <Route path="*" element={<div><h1 className="text-xl font-bold">Página no encontrada dentro del panel</h1><p>Error 404</p></div>} />
                 </Routes>

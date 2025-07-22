@@ -1,3 +1,5 @@
+// frontend/school-admin-react/src/components/CreatePaymentModal.jsx
+
 import React, { useState, useEffect, useCallback } from 'react';
 import Modal from './Modal';
 import { useNavigate } from 'react-router-dom';
@@ -29,9 +31,24 @@ const initialPaymentFormData = {
 
 const formatMoney = (amount, currency = 'VES', locale = 'es-VE') => {
     if (amount === null || amount === undefined || isNaN(parseFloat(amount))) return 'N/A';
-    const options = { style: 'currency', currency: currency, minimumFractionDigits: 2, maximumFractionDigits: 2 };
+    // Mantenemos la lógica de la moneda, pero cambiamos el símbolo para VES
+    const options = { 
+        style: 'currency', 
+        currency: currency, 
+        minimumFractionDigits: 2, 
+        maximumFractionDigits: 2,
+        currencyDisplay: 'symbol' // Usamos el símbolo
+    };
     if (currency === 'USD') locale = 'en-US';
-    return parseFloat(amount).toLocaleString(locale, options);
+    
+    let formattedString = parseFloat(amount).toLocaleString(locale, options);
+
+    // Reemplazo manual del símbolo para VES
+    if (currency === 'VES') {
+        formattedString = formattedString.replace(/VES/g, 'Bs.S').replace(/\s/g, ' '); // Asegura un espacio
+    }
+
+    return formattedString;
 };
 
 const formatDateForDisplay = (dateString) => {
@@ -111,8 +128,10 @@ function CreatePaymentModal({ isOpen, onClose, token, initialRepresentativeId = 
             
             setAssignableCharges((chargesData.items || []).map(charge => ({
                 applied_charge_id: charge.id,
+                // Este 'debt_remaining_ves' es el histórico, que servirá de fallback si no hay indexación
                 debt_remaining_ves: parseFloat(charge.amount_due_ves_at_emission || 0) - parseFloat(charge.amount_paid_ves || 0),
                 charge_description: `${charge.charge_concept?.name || 'Concepto Desc.'} (Vence: ${formatDateForDisplay(charge.due_date)}) ID:${charge.id}`,
+                // Guardamos todos los campos necesarios para el cálculo dinámico
                 is_indexed: charge.is_indexed,
                 original_concept_currency: charge.original_concept_currency,
                 amount_due_original_currency: charge.amount_due_original_currency,
@@ -319,21 +338,36 @@ function CreatePaymentModal({ isOpen, onClose, token, initialRepresentativeId = 
                             <div className="space-y-2 mt-2 max-h-48 overflow-y-auto pr-2 custom-scrollbar">
                                 <div className="grid grid-cols-12 gap-2 text-xs font-semibold text-gray-600 border-b pb-2 mb-2 items-center sticky top-0 bg-gray-50 z-10 px-1 py-1">
                                     <div className="col-span-6">Descripción del Cargo (ID)</div>
-                                    <div className="col-span-3 text-right">Deuda Pend. ({paymentFormData.currency_paid})</div>
-                                    <div className="col-span-3 text-right">Asignar ({paymentFormData.currency_paid})</div>
+                                    <div className="col-span-3 text-right">Deuda Pend. ({paymentFormData.currency_paid === 'VES' ? 'Bs.S' : paymentFormData.currency_paid})</div>
+                                    <div className="col-span-3 text-right">Asignar ({paymentFormData.currency_paid === 'VES' ? 'Bs.S' : paymentFormData.currency_paid})</div>
                                 </div>
                                 {assignableCharges.map((charge, index) => {
                                     let debtToDisplay = 0;
                                     const currencyToDisplay = paymentFormData.currency_paid;
+
                                     if (currencyToDisplay === 'USD') {
                                         if (charge.is_indexed && charge.original_concept_currency === 'USD') {
                                             debtToDisplay = (charge.amount_due_original_currency || 0) - (charge.amount_paid_original_currency_equivalent || 0);
                                         } else if (usdToVesRate) {
                                             debtToDisplay = charge.debt_remaining_ves / usdToVesRate;
-                                        } else { debtToDisplay = null; }
-                                    } else {
-                                        debtToDisplay = charge.debt_remaining_ves;
+                                        } else {
+                                            debtToDisplay = null;
+                                        }
+                                    } else { // currencyToDisplay es 'VES'
+                                        if (charge.is_indexed && charge.original_concept_currency === 'USD') {
+                                            // LÓGICA DE INDEXACIÓN AÑADIDA
+                                            const pendingDebtUSD = (charge.amount_due_original_currency || 0) - (charge.amount_paid_original_currency_equivalent || 0);
+                                            if (usdToVesRate) {
+                                                debtToDisplay = pendingDebtUSD * usdToVesRate;
+                                            } else {
+                                                debtToDisplay = null; // No se puede mostrar si no hay tasa
+                                            }
+                                        } else {
+                                            // Para cargos que originalmente son en VES, se mantiene el cálculo simple.
+                                            debtToDisplay = charge.debt_remaining_ves;
+                                        }
                                     }
+
                                     return (
                                         <div key={charge.applied_charge_id} className="grid grid-cols-12 gap-2 items-center border-b border-gray-100 pb-2 last:border-b-0 pt-1 px-1 hover:bg-gray-50 rounded">
                                             <div className="col-span-6 text-xs text-gray-700 truncate" title={charge.charge_description}>{charge.charge_description}</div>
@@ -349,8 +383,14 @@ function CreatePaymentModal({ isOpen, onClose, token, initialRepresentativeId = 
                             <p className="text-sm text-gray-500 mt-2 py-3 text-center">Este representante no tiene cargos elegibles para asignación.</p>
                         )}
                         <div className="mt-4 p-3 bg-gray-100 rounded-md text-sm space-y-1">
-                            <div className="flex justify-between"><span>Monto del Pago ({paymentFormData.currency_paid}):</span><span className="font-semibold">{formatMoney(paymentFormData.amount_paid, paymentFormData.currency_paid)}</span></div>
-                            <div className="flex justify-between"><span>Total Asignado ({paymentFormData.currency_paid}):</span><span className="font-semibold">{formatMoney(totalAllocatedInPaymentCurrency, paymentFormData.currency_paid)}</span></div>
+                            <div className="flex justify-between">
+                                <span>Monto del Pago ({paymentFormData.currency_paid === 'VES' ? 'Bs.S' : paymentFormData.currency_paid}):</span>
+                                <span className="font-semibold">{formatMoney(paymentFormData.amount_paid, paymentFormData.currency_paid)}</span>
+                            </div>
+                            <div className="flex justify-between">
+                                <span>Total Asignado ({paymentFormData.currency_paid === 'VES' ? 'Bs.S' : paymentFormData.currency_paid}):</span>
+                                <span className="font-semibold">{formatMoney(totalAllocatedInPaymentCurrency, paymentFormData.currency_paid)}</span>
+                            </div>
                         </div>
                     </fieldset>
                 )}
@@ -358,26 +398,24 @@ function CreatePaymentModal({ isOpen, onClose, token, initialRepresentativeId = 
                 <div className="pt-5 flex justify-end space-x-3 border-t border-gray-200 mt-6">
                     <button type="button" onClick={onClose} className="px-5 py-2.5 text-sm font-semibold text-slate-700 bg-slate-200 hover:bg-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-400 transition-all">Cancelar</button>
                     <button 
-                    type="submit" 
-                    disabled={isSubmittingPayment || isLoadingAssignableCharges || (!selectedRepForPayment && !initialRepresentativeId) || !(parseFloat(paymentFormData.amount_paid) > 0)} 
-                    // Clase dinámica para cambiar el color
-                    className={`px-6 py-2 text-sm font-medium text-white border border-transparent rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-300
-                        ${isConfirming 
-                            ? 'bg-orange-500 hover:bg-orange-600 focus:ring-orange-500' 
-                            : 'inline-flex items-center gap-x-2 px-3 py-2 text-sm font-bold text-white bg-gradient-to-br from-sky-500 to-indigo-600 hover:from-sky-600 hover:to-indigo-800 rounded-lg shadow-lg hover:shadow-sky-500/40 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-sky-500 transition-all duration-300 transform hover:-translate-y-px'
+                        type="submit" 
+                        disabled={isSubmittingPayment || isLoadingAssignableCharges || (!selectedRepForPayment && !initialRepresentativeId) || !(parseFloat(paymentFormData.amount_paid) > 0)} 
+                        className={`px-6 py-2 text-sm font-medium text-white border border-transparent rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-300
+                            ${isConfirming 
+                                ? 'bg-orange-500 hover:bg-orange-600 focus:ring-orange-500' 
+                                : 'inline-flex items-center gap-x-2 px-3 py-2 text-sm font-bold text-white bg-gradient-to-br from-sky-500 to-indigo-600 hover:from-sky-600 hover:to-indigo-800 rounded-lg shadow-lg hover:shadow-sky-500/40 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-sky-500 transition-all duration-300 transform hover:-translate-y-px'
+                            }
+                        `}
+                    >
+                        {isSubmittingPayment 
+                            ? 'Registrando...' 
+                            : (isConfirming ? '¿Confirmar Registro?' : 'Registrar Pago')
                         }
-                    `}
-                >
-                    {/* Texto dinámico del botón */}
-                    {isSubmittingPayment 
-                        ? 'Registrando...' 
-                        : (isConfirming ? '¿Confirmar Registro?' : 'Registrar Pago')
-                    }
-                </button>
-                                </div>
-                            </form>
-                        </Modal>
-                    );
-                }
+                    </button>
+                </div>
+            </form>
+        </Modal>
+    );
+}
 
 export default CreatePaymentModal;

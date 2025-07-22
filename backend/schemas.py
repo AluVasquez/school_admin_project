@@ -1,11 +1,11 @@
+# backend/schemas.py
+
 from pydantic import BaseModel, EmailStr, Field, computed_field, model_validator
 from typing import Optional, List, Literal, Generic, TypeVar, Any
 from datetime import date, datetime
 from . import models
 from .models import ChargeFrequency, ChargeCategory, ChargeConcept, GradeLevel, SchoolConfiguration, AppliedChargeStatus, Currency, InvoiceStatus
 from .models import ExpensePaymentStatus, ExpenseCategory, Supplier, Expense, ExpensePayment, EmissionType
-
-
 
 
 T = TypeVar('T')
@@ -1318,10 +1318,6 @@ class EmployeeResponse(EmployeeBase): # Cambiado de EmpleadoResponse
     class Config:
         from_attributes = True
         use_enum_values = True # Para que EmployeeContractType se muestre como string
-        
-        
-
-
 
 
 class EmployeeCreate(EmployeeBase): # Actualiza tu EmployeeCreate existente
@@ -1457,8 +1453,28 @@ class EmployeeSalaryComponentResponse(EmployeeSalaryComponentBase):
     class Config:
         from_attributes = True
         use_enum_values = True
+        
+        
+class SalaryHistoryBase(BaseModel):
+    effective_date: date
+    base_salary_amount: Optional[float] = None
+    base_salary_currency: Optional[models.Currency] = None
+    pay_frequency: Optional[models.EmployeePayFrequency] = None
+    hourly_rate: Optional[float] = None
+    change_reason: Optional[str] = None
 
-# --- Schemas for PayrollRun (Proceso/Corrida de Nómina) ---
+class SalaryHistoryResponse(SalaryHistoryBase):
+    id: int
+    employee_id: int
+    created_by_user: UserSimpleResponse
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+        use_enum_values = True
+        
+
+# --- Schemas for PayrollRun (Proceso/Corrida de Nómina) --- 
 
 class PayrollRunBase(BaseModel):
     name: str = Field(..., max_length=255, description="Nombre descriptivo de la corrida (Ej: 1ra Quincena Junio 2025)")
@@ -1468,6 +1484,7 @@ class PayrollRunBase(BaseModel):
     exchange_rate_usd_ves: Optional[float] = Field(None, gt=0, description="Tasa USD-VES usada para esta corrida")
     status: models.PayrollRunStatus = models.PayrollRunStatus.DRAFT
     processing_notes: Optional[str] = None
+    
 
 class PayrollRunCreate(BaseModel): # Campos mínimos para iniciar una corrida
     name: str = Field(..., max_length=255)
@@ -1521,7 +1538,13 @@ class EmployeeBalanceAdjustmentBase(BaseModel):
     currency: models.Currency
 
 class EmployeeBalanceAdjustmentCreate(EmployeeBalanceAdjustmentBase):
-    pass # exchange_rate_usd_ves y amount_ves se calculan en backend
+    target_payable_item_id: Optional[int] = Field(None, description="ID del 'EmployeePayableItem' al que se aplicará la deducción. Requerido si adjustment_type es 'deduction'.")
+
+    @model_validator(mode='after')
+    def check_deduction_requires_target(self):
+        if self.adjustment_type == models.EmployeeBalanceAdjustmentType.DEDUCTION and self.target_payable_item_id is None:
+            raise ValueError("Para una deducción, se debe proporcionar el 'target_payable_item_id' del concepto a afectar.")
+        return self
 
 class EmployeeBalanceAdjustmentUpdate(BaseModel): # Pocos campos actualizables
     adjustment_date: Optional[date] = None
@@ -1544,13 +1567,22 @@ class EmployeeBalanceAdjustmentResponse(EmployeeBalanceAdjustmentBase):
 class EmployeePaymentBase(BaseModel):
     employee_id: int
     payment_date: date
-    amount_paid_ves: float = Field(..., gt=0, description="Monto pagado al empleado, siempre en VES")
-    payment_method: Optional[str] = Field(None, max_length=100)
-    reference_number: Optional[str] = Field(None, max_length=255)
+    amount_paid: float = Field(..., gt=0, description="Monto pagado en su moneda original")
+    currency_paid: models.Currency
+    payment_method: Optional[str] = None
+    reference_number: Optional[str] = None
     notes: Optional[str] = None
+    
+class EmployeePaymentAllocationDetailCreate(BaseModel):
+    payable_item_id: int
+    amount_to_allocate_ves: float = Field(..., gt=0)
+
 
 class EmployeePaymentCreate(EmployeePaymentBase):
-    pass
+        allocations_details: List[EmployeePaymentAllocationDetailCreate] = Field(
+        default_factory=list,
+        description="Lista detallada de cómo se asigna este pago a los ítems pendientes."
+    )
 
 class EmployeePaymentUpdate(BaseModel): # Similar a ajustes, pocos campos actualizables
     payment_date: Optional[date] = None
@@ -1558,18 +1590,85 @@ class EmployeePaymentUpdate(BaseModel): # Similar a ajustes, pocos campos actual
     reference_number: Optional[str] = Field(None, max_length=255)
     notes: Optional[str] = None
 
-class EmployeePaymentResponse(EmployeePaymentBase):
+
+class EmployeePaymentAllocationResponse(BaseModel):
     id: int
+    employee_payable_item_id: int
+    amount_allocated_ves: float
+    
+    class Config:
+        from_attributes = True
+
+
+class EmployeePaymentResponse(BaseModel):
+    id: int
+    employee_id: int
+    payment_date: date
+    
+    amount_paid_original: float
+    currency_paid_original: models.Currency
+    amount_paid_ves_equivalent: float
+    exchange_rate_applied: Optional[float] = None
+    
+    payment_method: Optional[str] = None
+    reference_number: Optional[str] = None
+    notes: Optional[str] = None
+
     created_by_user: UserSimpleResponse
     created_at: datetime
-    # related_expense_id: Optional[int] = None # Si se vincula a un Expense (Porsia)
+    allocations: List['EmployeePaymentAllocationResponse'] = []
+
+    class Config:
+        from_attributes = True
+        use_enum_values = True
+
+# --- NUEVOS SCHEMAS PARA PRÉSTAMOS Y ADELANTOS DE EMPLEADOS ---
+
+class EmployeeLoanBase(BaseModel):
+    loan_type: models.LoanType = Field(..., description="Tipo: Préstamo (loan) o Adelanto (advance)")
+    request_date: date = Field(..., description="Fecha de solicitud/otorgamiento del préstamo/adelanto")
+    description: str = Field(..., max_length=500, description="Motivo o descripción del préstamo/adelanto")
+    total_amount_ves: float = Field(..., gt=0, description="Monto total en VES")
+    number_of_installments: Optional[int] = Field(1, gt=0, description="Número de cuotas para pagar. Para adelantos, es siempre 1.")
+
+class EmployeeLoanCreate(EmployeeLoanBase):
+    employee_id: int
+
+class EmployeeLoanUpdate(BaseModel):
+    description: Optional[str] = Field(None, max_length=500)
+    status: Optional[models.LoanStatus] = Field(None, description="Solo para cambios manuales como 'cancelled'")
+
+class EmployeeLoanResponse(EmployeeLoanBase):
+    id: int
+    employee_id: int
+    amount_paid_ves: float
+    installment_amount_ves: float
+    status: models.LoanStatus
+    created_by_user: UserSimpleResponse # Asumiendo que UserSimpleResponse ya existe
+    created_at: datetime
+    updated_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
         use_enum_values = True
         
         
-# --- Para generación de recibos de pago a empleados"
+class EmployeePayableItemResponse(BaseModel):
+    id: int
+    source_type: models.PayableItemSourceType
+    source_id: int
+    description: str
+    issue_date: date
+    due_date: date
+    amount_original: float
+    currency_original: models.Currency
+    amount_ves_at_creation: float
+    amount_paid_ves: float
+    status: models.PayableItemStatus
+
+    class Config:
+        from_attributes = True
+        use_enum_values = True
 
 
 class PayslipDetailItem(BaseModel):
@@ -1618,3 +1717,112 @@ class DashboardData(BaseModel):
     chart_data: List[ChartDataItem]
     recent_payments: List[Any] # Usamos Any para flexibilidad, se poblará con PaymentResponse
     recent_invoices: List[Any] # Se poblará con InvoiceResponse
+    
+    
+# --- SCHEMAS PARA REGISTRO DE ASISTENCIA ---
+
+
+class AttendanceRecordBase(BaseModel):
+    work_date: date
+    hours_worked: float = Field(..., gt=0, description="Las horas trabajadas deben ser un número positivo.")
+    notes: Optional[str] = None
+
+class AttendanceRecordCreate(AttendanceRecordBase):
+    employee_id: int
+
+class AttendanceRecordUpdate(AttendanceRecordBase):
+    pass
+
+class AttendanceRecordResponse(AttendanceRecordBase):
+    id: int
+    employee: EmployeeBasicResponse
+    created_by_user: UserSimpleResponse
+    created_at: datetime
+    payroll_run_id: Optional[int] = None # Para saber si ya fue procesado
+
+    class Config:
+        from_attributes = True
+        
+        
+# --- AUSENCIAS Y VACACIONES ---
+
+
+class LeaveTypeBase(BaseModel):
+    name: str = Field(..., max_length=100)
+    description: Optional[str] = None
+    is_paid: bool = True
+
+class LeaveTypeCreate(LeaveTypeBase):
+    pass
+
+class LeaveTypeUpdate(BaseModel):
+    name: Optional[str] = Field(None, max_length=100)
+    description: Optional[str] = None
+    is_paid: Optional[bool] = None
+
+class LeaveTypeResponse(LeaveTypeBase):
+    id: int
+    class Config: from_attributes = True
+
+class LeaveRequestBase(BaseModel):
+    start_date: date
+    end_date: date
+    reason: Optional[str] = None
+
+class LeaveRequestCreate(LeaveRequestBase):
+    employee_id: int
+    leave_type_id: int
+    
+class LeaveRequestUpdate(BaseModel):
+    leave_type_id: Optional[int] = None
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    reason: Optional[str] = None
+
+class LeaveRequestStatusUpdate(BaseModel):
+    status: models.LeaveRequestStatus
+    
+class LeaveRequestResponse(LeaveRequestBase):
+    id: int
+    employee: EmployeeBasicResponse
+    leave_type: LeaveTypeResponse
+    status: models.LeaveRequestStatus
+    created_at: datetime
+    class Config: from_attributes = True
+    
+    
+# --- SCHEMAS PARA REPORTES DE COSTO DE NÓMINAS ---
+
+
+class PayrollCostReportDetailSchema(BaseModel):
+    """Representa el desglose de costos para un solo empleado en el reporte."""
+    employee_id: int
+    employee_full_name: str
+    base_salary_ves: float
+    total_earnings_ves: float # Asignaciones
+    total_deductions_ves: float
+    net_pay_ves: float
+
+    class Config:
+        from_attributes = True
+
+class PayrollCostReportResponse(BaseModel):
+    """Define la estructura completa de la respuesta para el reporte de costo de nómina."""
+    payroll_run_id: int
+    payroll_run_name: str
+    period_start_date: date
+    period_end_date: date
+    
+    # Totales generales para la contabilidad
+    total_base_salary_ves: float
+    total_earnings_ves: float
+    total_deductions_ves: float
+    total_net_pay_ves: float
+    
+    employee_count: int
+    
+    # Detalle por empleado
+    details: List[PayrollCostReportDetailSchema]
+
+    class Config:
+        from_attributes = True

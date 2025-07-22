@@ -30,7 +30,7 @@ const StatCard = ({ title, value, isLoading, subtext = null, icon }) => {
                     </div>
                 ) : (
                     <>
-                        <p className={`mt-1 font-semibold text-slate-800 break-all ${valueFontSize}`}>{value}</p>
+                        <p className={`mt- font-semibold text-slate-800 break-all ${valueFontSize}`}>{value}</p>
                         {subtext && <p className="text-xs text-slate-400 mt-1 truncate">{subtext}</p>}
                     </>
                 )}

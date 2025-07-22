@@ -54,6 +54,38 @@ class FiscalPrinterBrand(str, enum.Enum):
     EPSON = "EPSON"
     BIXOLON = "BIXOLON"
     OTHER = "OTHER"
+    
+# --- NUEVOS ENUMS PARA PRÉSTAMOS ---
+
+class LoanStatus(str, enum.Enum):
+    PENDING = "pending"   # Para adelantos que aún no se han deducido
+    ACTIVE = "active"     # Para préstamos que se están pagando
+    PAID = "paid"         # Completamente pagado
+    CANCELLED = "cancelled" # Anulado por un administrador
+
+class LoanType(str, enum.Enum):
+    LOAN = "loan"         # Préstamo en cuotas
+    ADVANCE = "advance"   # Adelanto de salario (una sola cuota)
+    
+    
+class LeaveRequestStatus(str, enum.Enum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    DENIED = "denied"
+    CANCELLED = "cancelled"
+    
+# --- ENUMS PARA AJUSTES EN LAS CONVERSIONES DE MONEDA DE LOS PAGOS A EMPLEADOS AND STUFF ---
+
+class PayableItemStatus(str, enum.Enum):
+    PENDING = "pending"
+    PARTIALLY_PAID = "partially_paid"
+    PAID = "paid"
+
+class PayableItemSourceType(str, enum.Enum):
+    PAYROLL_RUN = "payroll_run"
+    ADJUSTMENT = "adjustment"
+    OTHER = "other"
+    
 
 # --- MODELOS EXISTENTES (CON MODIFICACIONES) ---
 
@@ -544,11 +576,18 @@ class Employee(Base):
     pay_frequency = Column(SQLAlchemyEnum(EmployeePayFrequency), nullable=True)
     hourly_rate = Column(Float, nullable=True)
     accumulated_hours = Column(Float, default=0.0, nullable=True)
-    current_balance_ves = Column(Float, default=0.0, nullable=False)
+    # current_balance_ves = Column(Float, default=0.0, nullable=False)  -- Me dio mucho conflicto con el modelo de EmployeeBalanceAdjustment
     salary_components = relationship("EmployeeSalaryComponent", back_populates="employee", cascade="all, delete-orphan")
+    salary_history = relationship("SalaryHistory", back_populates="employee", cascade="all, delete-orphan", order_by="SalaryHistory.effective_date.desc()")
+    payable_items = relationship("EmployeePayableItem", back_populates="employee", cascade="all, delete-orphan")
     payroll_run_details = relationship("PayrollRunEmployeeDetail", back_populates="employee")
     balance_adjustments = relationship("EmployeeBalanceAdjustment", back_populates="employee", cascade="all, delete-orphan")
     payments_made_to_employee = relationship("EmployeePayment", back_populates="employee", cascade="all, delete-orphan")
+    loans = relationship("EmployeeLoan", back_populates="employee", cascade="all, delete-orphan")
+    guaranteed_benefits_ves = Column(Float, nullable=False, default=0.0, comment="Total acumulado por garantía de prestaciones (abonos trimestrales + días adicionales). Art. 142.a y 142.b")
+    attendance_records = relationship("AttendanceRecord", back_populates="employee", cascade="all, delete-orphan")
+    leave_requests = relationship("LeaveRequest", back_populates="employee", cascade="all, delete-orphan")
+    last_benefit_calculation_date = Column(Date, nullable=True, comment="Última fecha en que se corrió el cálculo trimestral de prestaciones para este empleado.")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
 
@@ -569,6 +608,29 @@ class EmployeeSalaryComponent(Base):
     component_definition = relationship("SalaryComponentDefinition", back_populates="employee_assignments")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
+    
+    
+class SalaryHistory(Base):
+    __tablename__ = "salary_history"
+    id = Column(Integer, primary_key=True, index=True)
+    employee_id = Column(Integer, ForeignKey("employees.id"), nullable=False, index=True)
+    
+    effective_date = Column(Date, nullable=False, comment="Fecha a partir de la cual este salario es efectivo.")
+    
+    base_salary_amount = Column(Float, nullable=True)
+    base_salary_currency = Column(SQLAlchemyEnum(Currency), nullable=True)
+    pay_frequency = Column(SQLAlchemyEnum(EmployeePayFrequency), nullable=True)
+    hourly_rate = Column(Float, nullable=True)
+    
+    change_reason = Column(String(255), nullable=True, comment="Motivo del cambio (Ej: Aumento anual, Promoción).")
+    
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    employee = relationship("Employee", back_populates="salary_history")
+    created_by_user = relationship("User")
+
+
 
 class PayrollRun(Base):
     __tablename__ = "payroll_runs"
@@ -586,6 +648,8 @@ class PayrollRun(Base):
     updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
     employee_details = relationship("PayrollRunEmployeeDetail", back_populates="payroll_run", cascade="all, delete-orphan")
     processed_by_user = relationship("User")
+    processed_attendance_records = relationship("AttendanceRecord", back_populates="payroll_run")
+        
 
 class PayrollRunEmployeeDetail(Base):
     __tablename__ = "payroll_run_employee_details"
@@ -615,6 +679,7 @@ class EmployeeBalanceAdjustment(Base):
     amount_ves = Column(Float, nullable=False)
     created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    target_payable_item_id = Column(Integer, ForeignKey("employee_payable_items.id"), nullable=True, index=True)
     employee = relationship("Employee", back_populates="balance_adjustments")
     created_by_user = relationship("User")
 
@@ -623,16 +688,93 @@ class EmployeePayment(Base):
     id = Column(Integer, primary_key=True, index=True)
     employee_id = Column(Integer, ForeignKey("employees.id"), nullable=False)
     payment_date = Column(Date, nullable=False)
-    amount_paid_ves = Column(Float, nullable=False)
+    
+    amount_paid_original = Column(Float, nullable=False)
+    currency_paid_original = Column(SQLAlchemyEnum(Currency), nullable=False)
+    exchange_rate_applied = Column(Float, nullable=True)
+    amount_paid_ves_equivalent = Column(Float, nullable=False)
+
     payment_method = Column(String(100), nullable=True)
     reference_number = Column(String(255), nullable=True)
     notes = Column(Text, nullable=True)
     created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    
     employee = relationship("Employee", back_populates="payments_made_to_employee")
     created_by_user = relationship("User")
-    
     payslip = relationship("Payslip", back_populates="employee_payment", uselist=False, cascade="all, delete-orphan")
+    allocations = relationship("EmployeePaymentAllocation", back_populates="payment", cascade="all, delete-orphan")
+
+class EmployeeLoan(Base):
+    __tablename__ = "employee_loans"
+    id = Column(Integer, primary_key=True, index=True)
+    employee_id = Column(Integer, ForeignKey("employees.id"), nullable=False, index=True)
+    loan_type = Column(SQLAlchemyEnum(LoanType), nullable=False, default=LoanType.LOAN)
+    
+    request_date = Column(Date, nullable=False)
+    description = Column(String(500), nullable=False)
+    
+    total_amount_ves = Column(Float, nullable=False, comment="Monto total del préstamo/adelanto en VES.")
+    amount_paid_ves = Column(Float, nullable=False, default=0.0, comment="Monto total pagado hasta la fecha.")
+    
+    number_of_installments = Column(Integer, nullable=False, default=1, comment="Número de cuotas para pagar.")
+    installment_amount_ves = Column(Float, nullable=False, comment="Monto de cada cuota a deducir en la nómina.")
+    
+    status = Column(SQLAlchemyEnum(LoanStatus), nullable=False, default=LoanStatus.ACTIVE, index=True)
+    
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    employee = relationship("Employee", back_populates="loans")
+    created_by_user = relationship("User")
+    
+    
+class EmployeePayableItem(Base):
+    """
+    Representa un ítem individual que la escuela debe pagar a un empleado.
+    Es el equivalente de 'AppliedCharge' para los empleados.
+    """
+    __tablename__ = "employee_payable_items"
+    id = Column(Integer, primary_key=True, index=True)
+    employee_id = Column(Integer, ForeignKey("employees.id", ondelete="CASCADE"), nullable=False, index=True)
+    
+    source_type = Column(SQLAlchemyEnum(PayableItemSourceType), nullable=False, index=True)
+    source_id = Column(Integer, nullable=False, comment="ID del PayrollRun, Ajuste, etc., que originó este pago.")
+    
+    description = Column(String(255), nullable=False)
+    issue_date = Column(Date, nullable=False, index=True)
+    due_date = Column(Date, nullable=False, index=True)
+
+    amount_original = Column(Float, nullable=False)
+    currency_original = Column(SQLAlchemyEnum(Currency), nullable=False)
+    amount_ves_at_creation = Column(Float, nullable=False)
+    amount_paid_ves = Column(Float, nullable=False, default=0.0)
+    
+    status = Column(SQLAlchemyEnum(PayableItemStatus), nullable=False, default=PayableItemStatus.PENDING, index=True)
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    employee = relationship("Employee", back_populates="payable_items")
+    allocations = relationship("EmployeePaymentAllocation", back_populates="payable_item", cascade="all, delete-orphan")
+
+
+class EmployeePaymentAllocation(Base):
+    """
+    Tabla de enlace que registra qué porción de un EmployeePayment
+    se asignó a un EmployeePayableItem específico.
+    """
+    __tablename__ = "employee_payment_allocations"
+    id = Column(Integer, primary_key=True, index=True)
+    employee_payment_id = Column(Integer, ForeignKey("employee_payments.id", ondelete="CASCADE"), nullable=False)
+    employee_payable_item_id = Column(Integer, ForeignKey("employee_payable_items.id", ondelete="CASCADE"), nullable=False)
+    
+    amount_allocated_ves = Column(Float, nullable=False)
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    payment = relationship("EmployeePayment", back_populates="allocations")
+    payable_item = relationship("EmployeePayableItem", back_populates="allocations")
     
     
 # --- Recibos de pago a empleados ---
@@ -670,7 +812,64 @@ class Payslip(Base):
     # --- Metadatos ---
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
-    
+
+# --- MODELO PARA REGISTRO DE ASISTENCIA Y HORAS ---
 
     
+class AttendanceRecord(Base):
+    __tablename__ = "attendance_records"
+    id = Column(Integer, primary_key=True, index=True)
+    employee_id = Column(Integer, ForeignKey("employees.id", ondelete="CASCADE"), nullable=False, index=True)
+    work_date = Column(Date, nullable=False, index=True)
+    hours_worked = Column(Float, nullable=False)
+    notes = Column(Text, nullable=True)
     
+    # Este campo es clave: vincula el registro a una corrida de nómina una vez procesado
+    payroll_run_id = Column(Integer, ForeignKey("payroll_runs.id"), nullable=True, index=True)
+    
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    employee = relationship("Employee", back_populates="attendance_records")
+    payroll_run = relationship("PayrollRun", back_populates="processed_attendance_records")
+    created_by_user = relationship("User")
+    
+    
+    # --- AUSENCIAS Y VACACIONES ---
+    
+class LeaveType(Base):
+    __tablename__ = "leave_types"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), unique=True, nullable=False)
+    description = Column(Text, nullable=True)
+    is_paid = Column(Boolean, nullable=False, default=True, comment="Indica si la ausencia es remunerada.")
+    
+    leave_requests = relationship("LeaveRequest", back_populates="leave_type")
+
+class LeaveRequest(Base):
+    __tablename__ = "leave_requests"
+    id = Column(Integer, primary_key=True, index=True)
+    employee_id = Column(Integer, ForeignKey("employees.id", ondelete="CASCADE"), nullable=False, index=True)
+    leave_type_id = Column(Integer, ForeignKey("leave_types.id"), nullable=False, index=True)
+    
+    start_date = Column(Date, nullable=False)
+    end_date = Column(Date, nullable=False)
+    reason = Column(Text, nullable=True)
+    
+    status = Column(SQLAlchemyEnum(LeaveRequestStatus), nullable=False, default=LeaveRequestStatus.PENDING)
+    
+    # Para auditoría
+    requested_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    processed_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True) # Quien aprueba/rechaza
+    
+    # Para integración con nómina
+    payroll_run_id = Column(Integer, ForeignKey("payroll_runs.id"), nullable=True, index=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    employee = relationship("Employee", back_populates="leave_requests")
+    leave_type = relationship("LeaveType", back_populates="leave_requests")
+    payroll_run = relationship("PayrollRun") # Relación simple
+    requested_by_user = relationship("User", foreign_keys=[requested_by_user_id])
+    processed_by_user = relationship("User", foreign_keys=[processed_by_user_id])

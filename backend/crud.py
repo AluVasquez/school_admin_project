@@ -5410,8 +5410,8 @@ def create_employee_payment(
         for alloc in payment_in.allocations_details:
             total_allocated_ves += alloc.amount_to_allocate_ves
     
-    if round(total_allocated_ves, 2) > round(amount_paid_ves_equivalent, 2) + 0.01:
-        raise BusinessLogicError(f"El total asignado ({total_allocated_ves} VES) no puede exceder el monto del pago ({amount_paid_ves_equivalent} VES).")
+    if abs(round(total_allocated_ves, 2) - round(amount_paid_ves_equivalent, 2)) > 0.01:
+        raise BusinessLogicError(f"El total asignado ({formatCurrency(total_allocated_ves, 'VES')}) debe ser exactamente igual al monto total del pago ({formatCurrency(amount_paid_ves_equivalent, 'VES')}).")
 
     # 3. Crear el registro del pago principal
     db_payment = models.EmployeePayment(

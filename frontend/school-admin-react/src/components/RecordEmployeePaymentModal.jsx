@@ -91,8 +91,8 @@ function RecordEmployeePaymentModal({ isOpen, onClose, token, employee, onPaymen
     const handleSubmit = async (e) => {
         e.preventDefault();
         setError(null);
+        
         const totalPaid = parseFloat(paymentData.amount_paid);
-
         if (isNaN(totalPaid) || totalPaid <= 0) {
             toast.warn("El monto pagado debe ser un número positivo.");
             return;
@@ -110,9 +110,9 @@ function RecordEmployeePaymentModal({ isOpen, onClose, token, employee, onPaymen
             return;
         }
         
-        if (totalAllocatedInPaymentCurrency > totalPaid + 0.01) {
-            toast.error("El total asignado no puede ser mayor al monto del pago.");
-            setError("El total asignado excede el monto del pago.");
+        if (Math.abs(totalAllocatedInPaymentCurrency - totalPaid) > 0.01) {
+            toast.error('El monto total asignado debe ser exactamente igual al monto total del pago.');
+            setError('El total asignado debe ser exactamente igual al monto del pago.');
             return;
         }
 

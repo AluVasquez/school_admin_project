@@ -1,4 +1,4 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+const API_BASE_URL = "http://127.0.0.1:8000";
 
 /**
  * Un manejador de respuestas de fetch reutilizable y robusto.
@@ -8,24 +8,29 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
  * @returns {Promise<any>}
  */
 async function handleApiResponse(response) {
-    // Si la respuesta no es OK, procesamos el error.
     if (!response.ok) {
-        let errorData;
+        let errorDetailMessage = `Error ${response.status}: ${response.statusText || 'Respuesta desconocida del servidor.'}`;
         try {
-            // Intenta obtener los detalles del error del cuerpo JSON de la respuesta.
-            errorData = await response.json();
+            const errorData = await response.json();
+            if (errorData && errorData.detail) {
+                // Si 'detail' es un string (como en este caso), se usa directamente.
+                if (typeof errorData.detail === 'string') {
+                    errorDetailMessage = errorData.detail;
+                } 
+                // Si 'detail' es un array (errores de validación de FastAPI), se formatea.
+                else if (Array.isArray(errorData.detail)) {
+                    errorDetailMessage = errorData.detail.map(err => err.msg || JSON.stringify(err)).join('; ');
+                }
+            }
         } catch (e) {
-            // Si el cuerpo del error no es JSON, crea un detalle de error genérico.
-            errorData = { detail: `Error ${response.status}: ${response.statusText}` };
+            // Si el cuerpo del error no es JSON, se mantiene el mensaje de error HTTP básico.
+            console.warn("No se pudo parsear el JSON del cuerpo del error:", e);
         }
         
-        // Crea un nuevo objeto de error para lanzar.
-        const error = new Error('Ocurrió un error en la API.');
+        // Lanza un nuevo error PERO con el mensaje detallado que obtuvimos.
+        const error = new Error(errorDetailMessage);
         
-        // Adjuntamos la respuesta completa al error, similar a como lo hace Axios.
-        // Esto le da al código que lo llama acceso a `error.response.data`, `error.response.status`, etc.
         error.response = {
-            data: errorData,
             status: response.status,
             statusText: response.statusText,
         };
@@ -33,12 +38,10 @@ async function handleApiResponse(response) {
         throw error;
     }
 
-    // Si la respuesta es 204 (No Content), no hay cuerpo que parsear, devuelve éxito.
     if (response.status === 204) {
         return { success: true };
     }
 
-    // Si la respuesta es OK y tiene contenido, devuelve el JSON.
     return response.json();
 }
 
